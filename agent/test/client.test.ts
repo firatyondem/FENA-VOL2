@@ -13,7 +13,7 @@ const fakeFetch =
   };
 
 test('posts the request as JSON and returns the signed response', async () => {
-  const signed = readFixture('nodary-eth-usd-p0.json');
+  const signed = readFixture('nodary-eth-usd.json');
   const seen: Request[] = [];
   const response = await fetchSignedResponse('https://airnode.example/', request, fakeFetch(200, signed, seen));
   assert.deepEqual(response, signed);

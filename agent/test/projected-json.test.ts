@@ -12,7 +12,7 @@ import {
 import { readFixture } from './helpers.ts';
 
 test('reads a signed Nodary price with 18 decimals, without a float', () => {
-  const { data } = readFixture('nodary-eth-usd-p0.json');
+  const { data } = readFixture('nodary-eth-usd.json');
   assert.equal(readUint(data, 'price', 18), 2244695000000000000000n);
   assert.equal(readUint(data, 'updatedAt', 0), 1793381072608n);
 });

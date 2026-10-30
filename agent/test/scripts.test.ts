@@ -7,7 +7,7 @@ import { buildTamperSet } from '../scripts/tamper-set.ts';
 import { NODARY_ADDRESS, readFixture, readSharedJson } from './helpers.ts';
 
 const profiles = loadProfiles();
-const eth = readFixture('nodary-eth-usd-p0.json');
+const eth = readFixture('nodary-eth-usd.json');
 const btc = readFixture('nodary-btc-usd.json');
 
 test('the request hashes match the real Nodary responses and the fixture manifest', () => {

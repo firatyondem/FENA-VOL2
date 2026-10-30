@@ -15,7 +15,7 @@ const ethRequest = {
   responseProjection: { price: '/ETH~1USD/value', updatedAt: '/ETH~1USD/timestamp' },
 };
 
-const ethResponse = readFixture('nodary-eth-usd-p0.json');
+const ethResponse = readFixture('nodary-eth-usd.json');
 const btcResponse = readFixture('nodary-btc-usd.json');
 
 test('derives the request hash that Nodary signed for ETH/USD', () => {

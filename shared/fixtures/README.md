@@ -9,7 +9,7 @@ Fetched from the Nodary Airnode v2 (`0xE70f1e8b22a21e4Bb5188918a3033341b281E4c0`
 
 | File | Use |
 | --- | --- |
-| `nodary-eth-usd-p0.json` | A real ETH/USD price. Older than 5 minutes by the time you read it: the real "stale response". |
+| `nodary-eth-usd.json` | A real ETH/USD price. Older than 5 minutes by the time you read it: the real "stale response". |
 | `nodary-btc-usd.json` | A real price for a second asset: the real "different request" case against the ETH request. |
 | `nodary-doge-usd.json` | A real small price (`0.075845`), to test decimal reading. |
 

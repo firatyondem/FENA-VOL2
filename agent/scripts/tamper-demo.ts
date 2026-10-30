@@ -41,7 +41,7 @@ if (!VAULT_ADDRESS || !TRIGGER_ID) {
     return fetchSignedResponse(priceAirnode(profiles, asset).url, priceRequest(asset));
   };
   const stale = JSON.parse(
-    readFileSync(new URL('../../shared/fixtures/nodary-eth-usd-p0.json', import.meta.url), 'utf8')
+    readFileSync(new URL('../../shared/fixtures/nodary-eth-usd.json', import.meta.url), 'utf8')
   ) as SignedResponse;
   const cases = await buildTamperSet(await fetchPrice('ETH'), await fetchPrice('BTC'), stale);
   for (const tamper of cases) {

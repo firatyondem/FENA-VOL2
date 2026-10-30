@@ -32,7 +32,7 @@ test('keeps the spec defaults per asset', () => {
 
 test('builds the price requests that Nodary signed', () => {
   for (const [key, fixture] of [
-    ['ETH', 'nodary-eth-usd-p0.json'],
+    ['ETH', 'nodary-eth-usd.json'],
     ['BTC', 'nodary-btc-usd.json'],
     ['DOGE', 'nodary-doge-usd.json'],
   ] as const) {
@@ -43,7 +43,7 @@ test('builds the price requests that Nodary signed', () => {
 });
 
 test('reads a signed price and its source time', () => {
-  const response = readFixture('nodary-eth-usd-p0.json');
+  const response = readFixture('nodary-eth-usd.json');
   const signed = readSignedPrice(profiles, getAsset(profiles, 'ETH'), response);
   assert.equal(signed.price, 2244695000000000000000n);
   assert.equal(signed.sourceTime, 1793381072);
@@ -51,7 +51,7 @@ test('reads a signed price and its source time', () => {
 });
 
 test('treats a price older than the limit as a closed market', () => {
-  const signed = readSignedPrice(profiles, getAsset(profiles, 'ETH'), readFixture('nodary-eth-usd-p0.json'));
+  const signed = readSignedPrice(profiles, getAsset(profiles, 'ETH'), readFixture('nodary-eth-usd.json'));
   assert.ok(isPriceFresh(profiles, signed, signed.signedAt + 60));
   assert.ok(!isPriceFresh(profiles, signed, signed.sourceTime + profiles.maxPriceAgeSec + 1));
 });
