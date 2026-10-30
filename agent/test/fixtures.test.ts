@@ -43,10 +43,10 @@ const gateReasons: Partial<Record<Expectation, GateFailure>> = {
 test('the committed fixtures are exactly what the generator writes', async () => {
   const { manifest: generated, cases } = await buildFixtureSet(profiles);
   const directory = new URL('../../shared/fixtures/synthetic/', import.meta.url);
-  assert.equal(readFileSync(new URL('manifest.json', directory), 'utf8'), serialize(generated));
-  for (const { file, response } of cases) {
-    assert.equal(readFileSync(new URL(file, directory), 'utf8'), serialize(response), file);
-  }
+  // A Windows checkout may turn LF into CRLF; the JSON is the same either way.
+  const read = (file: string) => readFileSync(new URL(file, directory), 'utf8').replaceAll('\r\n', '\n');
+  assert.equal(read('manifest.json'), serialize(generated));
+  for (const { file, response } of cases) assert.equal(read(file), serialize(response), file);
 });
 
 for (const entry of manifest.cases) {
