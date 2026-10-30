@@ -45,8 +45,9 @@ export interface ClaudeClassifierOptions {
   onError?: (error: unknown) => void;
 }
 
-// Asks Claude for the spec's fixed format through structured outputs. Any failure (refusal, unparsable output, API
-// error) yields no relevant asset: Gate 1 fails closed, so nothing is triggered on a guess.
+// Asks Claude for the spec's fixed format through structured outputs. Gate 1 fails closed: a refusal or unparsable
+// output means no relevant asset, so nothing is triggered on a guess. An API error is thrown instead, so the engine asks
+// again on its next poll rather than dropping the post.
 export class ClaudeClassifier implements Classifier {
   readonly name: string;
   private readonly model: string;
@@ -66,8 +67,9 @@ export class ClaudeClassifier implements Classifier {
 
   async classify(post: PostForClassification, candidates: Candidate[]): Promise<Classification[]> {
     if (candidates.length === 0) return [];
+    let response: Awaited<ReturnType<ParseMessage>>;
     try {
-      const response = await this.parse({
+      response = await this.parse({
         model: this.model,
         max_tokens: 2048,
         // Classification needs little deliberation; low effort keeps each post fast and cheap.
@@ -78,12 +80,18 @@ export class ClaudeClassifier implements Classifier {
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: buildUserMessage(post, candidates) }],
       });
-      if (response.stop_reason === 'refusal') throw new Error('The model declined to classify the post');
-      if (!response.parsed_output) throw new Error(`No parsed output (stop reason ${response.stop_reason})`);
-      return sanitize(response.parsed_output.results, candidates);
     } catch (error) {
       this.onError(error);
+      throw error;
+    }
+    if (response.stop_reason === 'refusal') {
+      this.onError(new Error('The model declined to classify the post'));
       return [];
     }
+    if (!response.parsed_output) {
+      this.onError(new Error(`No parsed output (stop reason ${response.stop_reason})`));
+      return [];
+    }
+    return sanitize(response.parsed_output.results, candidates);
   }
 }
