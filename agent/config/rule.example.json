@@ -1,0 +1,49 @@
+{
+  "$comment": "A user's rule for `npm run set-rule`: the vault keeps one rule per user. USDC amounts are whole mock USDC; the agent wallet comes from AGENT_PRIVATE_KEY or AGENT_ADDRESS. Every value must be at least as strict as the asset's profile.",
+  "depositUsdc": 10000,
+  "buyAmountUsdc": 500,
+  "maxPerTradeUsdc": 500,
+  "dailyLimitUsdc": 2000,
+  "accounts": ["realDonaldTrump", "elonmusk"],
+  "assets": [
+    {
+      "asset": "OIL",
+      "budgetShareBps": 5000,
+      "trendThresholdBps": 150,
+      "spikeCapBps": 500,
+      "minWaitSec": 120,
+      "maxWindowSec": 600,
+      "cooldownSec": 60,
+      "takeProfitBps": 800,
+      "stagnationBandBps": 100,
+      "stagnationAfterSec": 600,
+      "topics": ["Venezuela", "Iran", "Strait of Hormuz", "OPEC", "sanctions", "pipeline", "drilling"]
+    },
+    {
+      "asset": "ETH",
+      "budgetShareBps": 3000,
+      "trendThresholdBps": 300,
+      "spikeCapBps": 1200,
+      "minWaitSec": 120,
+      "maxWindowSec": 600,
+      "cooldownSec": 60,
+      "takeProfitBps": 800,
+      "stagnationBandBps": 100,
+      "stagnationAfterSec": 600,
+      "topics": ["crypto reserve", "SEC", "stablecoin", "Ethereum"]
+    },
+    {
+      "asset": "DOGE",
+      "budgetShareBps": 2000,
+      "trendThresholdBps": 500,
+      "spikeCapBps": 2000,
+      "minWaitSec": 120,
+      "maxWindowSec": 600,
+      "cooldownSec": 60,
+      "takeProfitBps": 800,
+      "stagnationBandBps": 100,
+      "stagnationAfterSec": 600,
+      "topics": ["Dogecoin", "doge", "meme coin"]
+    }
+  ]
+}
