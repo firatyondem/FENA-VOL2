@@ -1,0 +1,28 @@
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.37"
+optimizer = true
+# Newer EVM versions let the compiler emit opcodes that some chains do not support yet.
+evm_version = "cancun"
+remappings = [
+  "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+  "forge-std/=lib/forge-std/src/",
+  "solady/=lib/solady/src/",
+]
+# Tests read signed responses from the shared fixtures and from their own copies.
+fs_permissions = [
+  { access = "read", path = "../shared/fixtures" },
+  { access = "read", path = "./test/fixtures" },
+]
+# Leaves out the compiler warnings of the dependencies.
+ignored_warnings_from = ["lib"]
+
+[fuzz]
+runs = 1000
+
+[fmt]
+line_length = 120
