@@ -13,10 +13,13 @@ remappings = [
   "forge-std/=lib/forge-std/src/",
   "solady/=lib/solady/src/",
 ]
-# Tests read signed responses from the shared fixtures and from their own copies.
+# Tests read signed responses from the shared fixtures and from their own copies. The deploy script reads the asset
+# profiles and writes the deployed addresses.
 fs_permissions = [
   { access = "read", path = "../shared/fixtures" },
   { access = "read", path = "./test/fixtures" },
+  { access = "read", path = "../shared/asset-profiles.json" },
+  { access = "read-write", path = "../shared/deployments" },
 ]
 # Leaves out the compiler warnings of the dependencies.
 ignored_warnings_from = ["lib"]
