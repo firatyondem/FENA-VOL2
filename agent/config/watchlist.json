@@ -1,0 +1,26 @@
+[
+  {
+    "handle": "realDonaldTrump",
+    "label": "Donald Trump",
+    "assets": ["OIL", "BTC", "ETH"],
+    "pinned": false
+  },
+  {
+    "handle": "elonmusk",
+    "label": "Elon Musk",
+    "assets": ["DOGE", "TSLA"],
+    "pinned": false
+  },
+  {
+    "handle": "JDVance",
+    "label": "JD Vance",
+    "assets": ["BTC", "OIL"],
+    "pinned": false
+  },
+  {
+    "handle": "marcorubio",
+    "label": "Marco Rubio",
+    "assets": ["OIL"],
+    "pinned": false
+  }
+]
