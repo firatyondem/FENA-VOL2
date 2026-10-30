@@ -19,3 +19,11 @@ build/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Foundry
+out/
+cache/
+broadcast/
+
+# Agent runtime state
+agent/.data/
