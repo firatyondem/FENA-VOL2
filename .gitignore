@@ -26,3 +26,6 @@ agent/.data/
 
 # Local deploy records
 contracts/broadcast/
+
+# Throwaway deployments from the end-to-end test
+shared/deployments/e2e-*.json
