@@ -17,7 +17,7 @@ const fixtureAirnode = privateKeyToAccount(FIXTURE_AIRNODE_KEY).address;
 const agentWallet = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
 const fixture = (file: string) => readSharedJson<SignedResponse>(`fixtures/synthetic/${file}`);
 const trump: WatchedAccount = { handle: 'realDonaldTrump', label: 'Donald Trump', assets: ['OIL', 'BTC', 'ETH'], pinned: false };
-const sell = { takeProfitBps: 800, stopLossBps: 500, stagnationBandBps: 100, stagnationAfterSec: 600 };
+const sell = { cooldownSec: 60, takeProfitBps: 800, stopLossBps: 500, stagnationBandBps: 100, stagnationAfterSec: 600 };
 
 // Answers with fixed results, so the engine is tested without a model
 class StubClassifier implements Classifier {
@@ -44,9 +44,15 @@ interface Scenario {
   post?: string;
   prices?: Record<string, string>;
   answers?: Record<string, [boolean, number]>;
+  oilAirnode?: `0x${string}`;
 }
 
-const setup = ({ post = 'tweet-trump-venezuela.json', prices = {}, answers = { ETH: [true, 0.9] } }: Scenario = {}) => {
+const setup = ({
+  post = 'tweet-trump-venezuela.json',
+  prices = {},
+  answers = { ETH: [true, 0.9] },
+  oilAirnode = fixtureAirnode,
+}: Scenario = {}) => {
   const clock = { now: P0_TIME + 60 };
   const state = { post, prices: { ETH: 'eth-p0.json', OIL: 'oil-p0.json', ...prices } as Record<string, string> };
   const rule: Rule = {
@@ -60,9 +66,9 @@ const setup = ({ post = 'tweet-trump-venezuela.json', prices = {}, answers = { E
       { asset: 'ETH', budgetShareBps: 5000, ...DEMO_ETH_RULE, ...sell },
     ],
     topics: {},
-    maxPerTradeBps: 500,
-    dailyLimitBps: 2000,
-    cooldownSec: 60,
+    buyAmount: 500n * 10n ** 6n,
+    maxPerTrade: 500n * 10n ** 6n,
+    dailyLimit: 2_000n * 10n ** 6n,
   };
   const vault = new SimVault({
     profiles,
@@ -70,7 +76,7 @@ const setup = ({ post = 'tweet-trump-venezuela.json', prices = {}, answers = { E
     deposits: { r1: 10_000n * 10n ** 6n },
     caller: agentWallet,
     tweetAirnode: fixtureAirnode,
-    priceAirnodes: { ETH: fixtureAirnode, OIL: fixtureAirnode },
+    priceAirnodes: { ETH: fixtureAirnode, OIL: oilAirnode },
     now: () => clock.now,
   });
   const log = new EventLog({ now: () => clock.now * 1000 });
@@ -124,7 +130,8 @@ test('a post is classified once, however often it is polled', async () => {
   assert.equal(kinds().filter((kind) => kind === 'post.seen').length, 1);
 });
 
-test('a post about several assets is served in the rule priority order', async () => {
+test('a post about several assets opens a trigger for each, in the rule priority order', async () => {
+  // ETH scores higher, but the user put oil first
   const { engine, log } = setup({ answers: { OIL: [true, 0.8], ETH: [true, 0.95] } });
   await engine.pollAccount(trump);
   const triggerEvents = log.recent().filter((event) => event.kind.startsWith('trigger.'));
@@ -132,10 +139,27 @@ test('a post about several assets is served in the rule priority order', async (
     triggerEvents.map((event) => [event.kind, 'asset' in event ? event.asset : '']),
     [
       ['trigger.opened', 'OIL'],
-      ['trigger.rejected', 'ETH'],
+      ['trigger.opened', 'ETH'],
     ]
   );
-  assert.equal((triggerEvents[1] as { reason: string }).reason, 'PostAlreadyUsed');
+});
+
+test('an asset the vault refuses does not stop the next one', async () => {
+  // The vault expects oil prices from another Airnode, so the fixture's oil P0 is refused
+  const { engine, log } = setup({
+    answers: { OIL: [true, 0.8], ETH: [true, 0.95] },
+    oilAirnode: '0x9aAD9AF9D2d0B9429F6e1C18FA733F41926BC678',
+  });
+  await engine.pollAccount(trump);
+  const triggerEvents = log.recent().filter((event) => event.kind.startsWith('trigger.'));
+  assert.deepEqual(
+    triggerEvents.map((event) => [event.kind, 'asset' in event ? event.asset : '']),
+    [
+      ['trigger.rejected', 'OIL'],
+      ['trigger.opened', 'ETH'],
+    ]
+  );
+  assert.equal((triggerEvents[0] as { reason: string }).reason, 'NotSignedByAirnode');
 });
 
 test('a low-confidence answer opens nothing', async () => {

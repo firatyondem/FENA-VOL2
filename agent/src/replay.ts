@@ -63,20 +63,22 @@ export const replayRule = (profiles: Profiles, agent: `0x${string}`): Rule => {
       spikeCapBps: profile.spikeCapBps,
       minWaitSec: profiles.demoOverrides.minWaitSec ?? 120,
       maxWindowSec: profiles.demoOverrides.maxWindowSec ?? 600,
+      cooldownSec: profiles.demoOverrides.cooldownSec ?? 60,
       ...sell,
     };
   };
+  // 500 USDC a buy, a 2,000 USDC day split 50 / 30 / 20 (spec: 5% per trade and 20% a day of a 10,000 USDC vault)
   return {
     id: 'demo-1',
     owner: agent,
     agent,
     paused: false,
+    buyAmount: 500n * 10n ** 6n,
+    maxPerTrade: 500n * 10n ** 6n,
+    dailyLimit: 2_000n * 10n ** 6n,
     accounts: { realDonaldTrump: ['OIL', 'ETH'], elonmusk: ['DOGE'] },
     assets: [demo('OIL', 5000), demo('ETH', 3000), demo('DOGE', 2000)],
     topics: {},
-    maxPerTradeBps: 500,
-    dailyLimitBps: 2000,
-    cooldownSec: profiles.demoOverrides.cooldownSec ?? 60,
   };
 };
 

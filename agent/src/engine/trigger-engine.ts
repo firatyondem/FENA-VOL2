@@ -38,7 +38,8 @@ export interface PendingTrigger {
   abandoned: boolean;
 }
 
-const TERMINAL_CONFIRM_REJECTIONS = new Set(['TriggerNotPending', 'WindowClosed', 'AboveSpikeCap']);
+// Vault.sol errors after which no later P1 can confirm the trigger
+const TERMINAL_CONFIRM_REJECTIONS = new Set(['TriggerNotOpen', 'WindowClosed', 'SpikeTooHigh']);
 
 const price18 = (value: bigint) => formatFixedPoint(value, 18);
 
@@ -117,7 +118,8 @@ export class TriggerEngine {
     return [...candidates.values()];
   }
 
-  // Serves the relevant assets in the rule's priority order; the vault's budget split stops the rest.
+  // Serves the relevant assets in the rule's priority order. The vault takes one trigger per user, asset and post, and
+  // its budget split stops an asset whose share of the day is spent.
   private async openForRule(
     rule: Rule,
     account: WatchedAccount,
@@ -176,8 +178,6 @@ export class TriggerEngine {
       } catch (error) {
         const reason = error instanceof VaultRejection ? error.reason : errorMessage(error);
         log.append({ kind: 'trigger.rejected', asset: asset.key, stage: 'open', reason });
-        // One post triggers a rule once: the first asset in priority order took it.
-        if (reason === 'PostAlreadyUsed') return;
       }
     }
   }
@@ -241,7 +241,7 @@ export class TriggerEngine {
     try {
       await this.deps.vault.expireTrigger(trigger.triggerId);
     } catch (error) {
-      if (!(error instanceof VaultRejection && error.reason === 'TriggerNotPending')) {
+      if (!(error instanceof VaultRejection && error.reason === 'TriggerNotOpen')) {
         this.deps.log.append({ kind: 'error', where: `expire ${trigger.triggerId}`, message: errorMessage(error) });
         return;
       }

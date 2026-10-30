@@ -1,5 +1,5 @@
-// The sell keeper: selling uses only signed market prices, never posts. Anyone may submit the signed price; the vault
-// checks the condition again before it sells.
+// The sell keeper: selling uses only signed market prices, never posts. Anyone may submit the signed price for a take
+// profit or a stagnation exit; the vault checks the condition again before it sells.
 import { formatUnits } from 'viem';
 import type { SignedResponse } from '../airnode/attestation.ts';
 import { formatFixedPoint } from '../airnode/projected-json.ts';
@@ -7,19 +7,38 @@ import type { Position, RuleAsset, SellKind, VaultPort } from '../chain/vault.ts
 import { VaultRejection } from '../chain/vault.ts';
 import type { EventLog } from '../log.ts';
 import { getAsset, isPriceFresh, type Profiles, readSignedPrice } from '../profiles.ts';
-import { risesAtLeast } from './gates.ts';
 
 const BPS = 10_000n;
 
-type SellParams = Pick<RuleAsset, 'takeProfitBps' | 'stopLossBps' | 'stagnationBandBps' | 'stagnationAfterSec'>;
+type SellParams = Pick<RuleAsset, 'takeProfitBps' | 'stagnationBandBps' | 'stagnationAfterSec' | 'stopLossBps'>;
 
-// Stop loss first, so a crash is never mistaken for stagnation; then take profit; then the stagnation exit.
-export const decideSell = (position: Position, params: SellParams, price: bigint, now: number): SellKind | undefined => {
+// The vault's sell checks, for a price the source took at `priceTime`. Stop loss first, so a crash is never read as
+// stagnation; then take profit; then the stagnation exit. A 0 turns each one off, as in the vault.
+export const decideSell = (
+  position: Position,
+  params: SellParams,
+  price: bigint,
+  priceTime: number,
+  allowed: readonly SellKind[] = ['take-profit', 'stagnation', 'stop-loss']
+): SellKind | undefined => {
+  if (priceTime < position.entryTime) return undefined;
   const entry = position.entryPrice;
-  if (params.stopLossBps > 0 && price * BPS <= entry * (BPS - BigInt(params.stopLossBps))) return 'stop-loss';
-  if (risesAtLeast(entry, price, params.takeProfitBps)) return 'take-profit';
+  const stop = params.stopLossBps ?? 0;
+  if (allowed.includes('stop-loss') && stop > 0 && price * BPS <= entry * (BPS - BigInt(stop))) return 'stop-loss';
+  if (
+    allowed.includes('take-profit') &&
+    params.takeProfitBps > 0 &&
+    price >= (entry * (BPS + BigInt(params.takeProfitBps))) / BPS
+  ) {
+    return 'take-profit';
+  }
   const distance = price > entry ? price - entry : entry - price;
-  if (now - position.entryTime >= params.stagnationAfterSec && distance * BPS <= entry * BigInt(params.stagnationBandBps)) {
+  if (
+    allowed.includes('stagnation') &&
+    params.stagnationAfterSec > 0 &&
+    priceTime >= position.entryTime + params.stagnationAfterSec &&
+    distance * BPS <= entry * BigInt(params.stagnationBandBps)
+  ) {
     return 'stagnation';
   }
   return undefined;
@@ -55,7 +74,7 @@ export class SellKeeper {
         const response = await (prices.get(position.asset) as Promise<SignedResponse>);
         const price = readSignedPrice(profiles, getAsset(profiles, position.asset), response);
         if (!isPriceFresh(profiles, price, now())) continue;
-        const kind = decideSell(position, params, price.price, now());
+        const kind = decideSell(position, params, price.price, price.sourceTime, vault.keeperSellKinds);
         if (!kind) continue;
         const sold = await vault.sell(position.id, kind, response);
         log.append({

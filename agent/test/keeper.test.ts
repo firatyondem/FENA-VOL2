@@ -26,19 +26,31 @@ const position: Position = {
 test('take profit at +8% and above', () => {
   assert.equal(decideSell(position, params, 2160n * e18, 1_100), 'take-profit');
   assert.equal(decideSell(position, params, 2160n * e18 - 1n, 1_100), undefined);
+  assert.equal(decideSell(position, { ...params, takeProfitBps: 0 }, 9000n * e18, 1_100), undefined, '0 turns it off');
 });
 
 test('stop loss at -5% and below, before anything else', () => {
   assert.equal(decideSell(position, params, 1900n * e18, 5_000), 'stop-loss');
   assert.equal(decideSell(position, params, 1900n * e18 + 1n, 1_100), undefined);
-  assert.equal(decideSell(position, { ...params, stopLossBps: 0 }, 1n, 1_100), undefined, 'zero turns it off');
+  assert.equal(decideSell(position, { ...params, stopLossBps: 0 }, 1n, 1_100), undefined, '0 turns it off');
 });
 
-test('stagnation exit only after the wait and inside the band', () => {
+test('stagnation exit only after the delay, measured on the price time, and inside the band', () => {
   assert.equal(decideSell(position, params, 2015n * e18, 1_599), undefined);
   assert.equal(decideSell(position, params, 2015n * e18, 1_600), 'stagnation');
   assert.equal(decideSell(position, params, 1980n * e18, 1_600), 'stagnation');
   assert.equal(decideSell(position, params, 2021n * e18, 1_600), undefined);
+  assert.equal(decideSell(position, { ...params, stagnationAfterSec: 0 }, 2000n * e18, 9_999), undefined, '0 turns it off');
+});
+
+test('never sells on a price taken before the buy', () => {
+  assert.equal(decideSell(position, params, 3000n * e18, 999), undefined);
+});
+
+test('only offers the sells the vault lets the keeper make', () => {
+  const onchain = ['take-profit', 'stagnation'] as const;
+  assert.equal(decideSell(position, params, 1800n * e18, 1_100, onchain), undefined, 'no stop loss on-chain');
+  assert.equal(decideSell(position, params, 2200n * e18, 1_100, onchain), 'take-profit');
 });
 
 test('the keeper sells a bought position at take profit with a signed price', async () => {
@@ -51,12 +63,12 @@ test('the keeper sells a bought position at take profit with a signed price', as
     owner: agent,
     agent,
     paused: false,
+    buyAmount: 500n * 10n ** 6n,
+    maxPerTrade: 500n * 10n ** 6n,
+    dailyLimit: 2_000n * 10n ** 6n,
     accounts: { realDonaldTrump: ['ETH'] },
-    assets: [{ asset: 'ETH', budgetShareBps: 10_000, ...DEMO_ETH_RULE, ...params }],
+    assets: [{ asset: 'ETH', budgetShareBps: 10_000, cooldownSec: 60, ...DEMO_ETH_RULE, ...params }],
     topics: {},
-    maxPerTradeBps: 500,
-    dailyLimitBps: 2000,
-    cooldownSec: 60,
   };
   const vault = new SimVault({
     profiles,
