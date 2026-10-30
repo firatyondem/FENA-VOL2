@@ -1,70 +1,84 @@
 # Agent, mocks and deployment (Person B)
 
-The agent notices posts, filters noise and brings signed proof to the vault. It never predicts and never holds funds:
-the worst a wrong or malicious agent can do is submit a trigger the vault rejects.
+The agent notices posts, filters noise and brings signed proof to Person A's vault. It never predicts and never holds
+funds: the worst a wrong or malicious agent can do is submit a trigger the vault rejects.
 
 ```
-post (signed, TwitterAPI.io Airnode) ──> relevance check (Claude) ──> openTrigger(post, P0)   Gate 1
-                                                                  └─> confirmTrigger(P1)      Gate 2, after the window opens
-signed price (Nodary / TickerLayer) ──> sell keeper ──────────────> sell(take profit, stagnation, stop loss)
+post (signed, TwitterAPI.io Airnode) ──> relevance check (Claude) ──> openTrigger(user, asset, post, P0)   Gate 1
+                                                                  └─> confirmTrigger(trigger, P1)          Gate 2
+signed price (Nodary / TickerLayer) ──> sell keeper ──────────────> sell(take profit | stagnation)
 ```
 
 ## Run it
 
-Needs Node 22.18+ (it runs the `.ts` sources directly) and, for the contracts, Foundry.
+Needs Node 22.18+ (it runs the `.ts` sources directly) and Foundry.
 
 ```sh
 cd agent
 npm install
-npm test          # 120+ tests, no network
-npm start         # The Wire Desk console at http://127.0.0.1:4173, replay mode
+npm test           # unit tests, no network
+npm run test:e2e   # the agent against the real Vault on a local anvil (needs anvil and forge on PATH)
+npm start          # The Wire Desk console at http://127.0.0.1:4173, replay mode
 ```
 
-`npm start` without keys runs the **stage replay**: the real engine, classifier and keeper against an in-memory
-vault, fed with signed fixtures on a 10x clock. It shows one valid run (an oil buy at the signed P1, then a take-profit
-sell) and the four tamper rejections. With `ANTHROPIC_API_KEY` set, Claude classifies the posts instead of the keyword
-baseline; the Ðogecoin post shows the difference.
+`npm start` without keys runs the **stage replay**: the real engine, classifier and keeper against an in-memory copy of
+the vault's checks, fed with signed fixtures on a 10x clock. It shows one valid run (an oil buy at the signed P1, then a
+take-profit sell) and the four tamper rejections. With `ANTHROPIC_API_KEY` set, Claude classifies the posts instead of
+the keyword baseline; the Ðogecoin post shows the difference.
 
-For **live mode**, copy `.env.example` to `.env`, copy `config/rules.example.json` to `config/rules.json` and match
-the deployed rule, then `AGENT_MODE=live npm start`.
+## Deploy and go live
+
+From `contracts/`, after `npm run request-hashes` in `agent/`:
+
+```sh
+forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast   # PRIVATE_KEY in the environment
+```
+
+`Deploy.s.sol` deploys mock USDC, the mock DEX, tOIL, tDOGE, tETH, tBTC, tTSLA and the `Vault`, registers every asset
+profile (asset id `keccak256("OIL")`, its price Airnode and request hash, the spec's limits with a 2-minute demo wait)
+and every watched account, and writes the addresses to `shared/deployments/<chain id>.json`. `DEMO_WAITS=false` keeps
+the spec's 30 min to 1 h waits; `FIXTURE_AIRNODES=true` registers the public fixture key for local tests.
+
+Then, in `agent/` with `.env` filled in (see `.env.example`):
+
+```sh
+npm run export-abi   # after any vault change: ABIs to shared/deployments/abi/, types to src/chain/vault-abi.ts
+npm run set-rule     # the demo user deposits mock USDC and sets config/rule.example.json with this agent
+AGENT_MODE=live npm start
+```
+
+In live mode the agent reads its users from the vault: everyone whose latest `RuleSet` names its wallet, with their
+assets, limits, watched accounts and topics. It finds open positions from `TriggerConfirmed`, so a restart loses none.
 
 | Command | What it does |
 | --- | --- |
 | `npm run fixtures` | Regenerates the signed fixtures in `shared/fixtures/synthetic/` |
-| `npm run request-hashes` | Writes the hashes the vault stores to `shared/deployments/request-hashes.json` |
+| `npm run request-hashes` | Writes the hashes the deploy registers to `shared/deployments/request-hashes.json` |
+| `npm run export-abi` | Copies the compiled ABIs for the agent and the frontend |
+| `npm run set-rule` | Funds a user and sets their rule (`USER_PRIVATE_KEY`, `AGENT_PRIVATE_KEY`) |
 | `npm run fetch-prices -- ETH OIL --save` | Fetches and verifies live signed prices |
-| `npm run tamper-demo` | The four forgeries against the deployed vault (`VAULT_ADDRESS`, `TRIGGER_ID`) or the SimVault |
+| `npm run tamper-demo` | The four forgeries against the deployed vault (`TRIGGER_ID`) or the in-memory vault |
 | `npm run typecheck` | `tsc` over sources, scripts and tests |
 
-## Mocks and deployment
+## How it handles failure
 
-```sh
-forge test                                   # mock token and DEX tests
-PRIVATE_KEY=0x... forge script contracts/script/DeployMocks.s.sol --rpc-url $RPC_URL --broadcast
-```
-
-`DeployMocks` deploys mock USDC (6 decimals, open faucet), the mock DEX and tOIL, tDOGE, tETH, tBTC, tTSLA, and writes
-their addresses to `shared/deployments/<chain id>.json`. Set `VAULT_ADDRESS` to approve an existing vault as the DEX
-trader. The DEX swaps at exactly the price it is given, so only the vault may call it.
+- Every write is simulated first; a revert comes back as the vault's error name (`SpikeTooHigh`, `NotSignedByAirnode`
+  and so on) and is final for that post and asset.
+- A passing outage (Claude's API, a price fetch, the RPC) is retried on the next poll while the post is still young
+  enough for a P0. The classification is kept, and assets that already opened are not opened again.
+- A refusal or unusable answer from the model means "not relevant": nothing is triggered on a guess.
 
 ## Hand-offs to Person A
 
-- **Fixtures**: `shared/fixtures/` (see its README). Real Nodary responses, plus synthetic tweets, P0/P1 prices and
-  the four tamper cases signed by a public test key, with a manifest of expected outcomes.
-- **Request hashes**: `shared/deployments/request-hashes.json`.
-- **Mock addresses**: `shared/deployments/<chain id>.json`; local anvil addresses are committed.
-- **Tweet time on-chain**: X ids are Snowflakes, so `(id >> 22) + 1288834974657` is the creation time in ms. That is
-  simpler than parsing X's `createdAt` string, which IsoTimestamp does not read.
+- **MockDEX** implements `IMockDEX`: anyone may call, buy pulls USDC, sell pulls the asset and mints USDC.
+- **Fixtures**: `shared/fixtures/` (see its README). `FixtureTamperTest` reads `nodary-eth-usd.json` and passes.
+- **Deployment**: `contracts/script/Deploy.s.sol`; addresses in `shared/deployments/<chain id>.json`, ABIs in
+  `shared/deployments/abi/`.
 
-## Assumptions to confirm at kickoff
+## Still open
 
-- `src/chain/vault-abi.ts` is a **draft** of IVault: `openTrigger(ruleId, asset, account, post, p0)`,
-  `confirmTrigger(triggerId, p1)`, `expireTrigger`, `sell(positionId, kind, price)`, with each signed response passed
-  as `(uint256 timestamp, bytes data, bytes signature)`, and the custom error names listed there. Replace it with the
-  frozen interface and rerun the tests.
-- Gate 2 times use each price's source time (`updatedAt`); the SimVault does the same.
-- One post opens one trigger per rule (the first relevant asset in priority order). If the vault allows one per asset,
-  the engine already tries the next asset.
-- TickerLayer's `lastTrade.timestamp` unit is assumed to be milliseconds; `npm run fetch-prices -- OIL --save` with a
-  payer key confirms it.
-- Watched handles and pinned-tweet flags in `config/watchlist.json` should be checked with one paid call each.
+- Deploying to Base Sepolia needs a funded deployer key (testnet ETH).
+- One paid call per account and per TickerLayer asset (needs `PAYER_PRIVATE_KEY` with aUSD) to confirm the handles and
+  pinned-tweet flags in `config/watchlist.json` and the unit of TickerLayer's `lastTrade.timestamp` (assumed ms);
+  `npm run fetch-prices -- OIL TSLA --save` keeps the responses.
+- The deployed vault has no stop loss; the keeper only offers take profit and the stagnation exit on-chain.
