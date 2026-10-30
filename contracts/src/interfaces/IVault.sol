@@ -9,6 +9,10 @@ pragma solidity ^0.8.24;
 /// @dev Units: percentages in basis points (10_000 = 100%), durations and times in seconds, prices with 18 decimals,
 /// amounts in token units. Every signed response must come from the request whose hash the vault stores: a price
 /// projection has the fields "price" and "updatedAt", and a post projection has the field "id" with the tweet ID.
+/// A response is accepted for at most 5 minutes after the Airnode signed it (ResponseTooOld). Each P0 and P1 is recorded
+/// per user under keccak256(abi.encode(requestHash, timestamp, data)): it cannot open or confirm a second trigger of the
+/// same user (ResponseAlreadyUsed), but the same signed price can serve triggers of different users. Sell prices are not
+/// recorded, so one price can sell several positions; each position sells once.
 interface IVault {
     /// @notice A response that an Airnode v2 signed, as the starter's fetch-response prints it
     /// @dev `data` is the signed JSON string as bytes, sent as it is, without parsing it and writing it again. The vault
@@ -122,7 +126,12 @@ interface IVault {
     event Deposited(address indexed user, uint256 amount);
     event Withdrawn(address indexed user, uint256 amount);
     event RuleSet(
-        address indexed user, Rule rule, bytes32[] assetIds, AssetRule[] assetRules, bytes32[] watchedAccounts
+        address indexed user,
+        Rule rule,
+        bytes32[] assetIds,
+        AssetRule[] assetRules,
+        string[] assetTopics,
+        bytes32[] watchedAccounts
     );
     event PausedSet(address indexed user, bool isPaused);
     event TriggerOpened(
@@ -201,11 +210,14 @@ interface IVault {
     /// @notice Replaces the caller's rule
     /// @param assetIds Assets that the rule may buy, in the user's priority order
     /// @param assetRules The rule for each asset in `assetIds`
+    /// @param assetTopics For each asset in `assetIds`, the comma-separated topic keywords that the agent checks posts
+    /// against at Gate 1. RuleSet emits them, and the vault does not store them, so the agent reads the latest RuleSet.
     /// @param watchedAccounts Account request hashes whose posts can open triggers
     function setRule(
         Rule calldata rule,
         bytes32[] calldata assetIds,
         AssetRule[] calldata assetRules,
+        string[] calldata assetTopics,
         bytes32[] calldata watchedAccounts
     ) external;
 

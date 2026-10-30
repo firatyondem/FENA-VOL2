@@ -96,7 +96,15 @@ abstract contract VaultTestBase is AirnodeV2Test {
         assetIds[0] = ETH;
         IVault.AssetRule[] memory assetRules = new IVault.AssetRule[](1);
         assetRules[0] = assetRule;
-        vault.setRule(rule(), assetIds, assetRules, watched());
+        vault.setRule(rule(), assetIds, assetRules, topics(1), watched());
+    }
+
+    /// @dev The same topic keywords for each of `count` assets
+    function topics(uint256 count) internal pure returns (string[] memory assetTopics) {
+        assetTopics = new string[](count);
+        for (uint256 i; i < count; i++) {
+            assetTopics[i] = "tariffs,Venezuela";
+        }
     }
 
     function watched() internal pure returns (bytes32[] memory accounts) {

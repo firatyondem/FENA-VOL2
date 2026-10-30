@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {IVault} from "../src/interfaces/IVault.sol";
 import {AirnodeV2Attestation} from "../src/lib/AirnodeV2Attestation.sol";
+import {TestToken} from "./utils/TestToken.sol";
 import {VaultTestBase} from "./utils/VaultTestBase.sol";
 
 /// @notice Selling at a signed price: by hand, for take-profit, or as a stagnation exit. Entry is 2070.
@@ -108,6 +109,18 @@ contract SellingTest is VaultTestBase {
         // Selling by hand still works while paused.
         vm.prank(user);
         vault.sell(positionId, IVault.SellReason.Manual, price);
+    }
+
+    function test_Sell_SellsTheBoughtTokenAfterTheProfileChangesItsToken() public {
+        IVault.AssetProfile memory profile = ethProfile();
+        profile.token = address(new TestToken("Other ETH", "oETH", 18));
+        vault.setAssetProfile(ETH, profile);
+        vm.warp(boughtAt + 10 minutes);
+        IVault.SignedResponse memory price = signedPrice("1900");
+
+        vm.prank(user);
+        vault.sell(positionId, IVault.SellReason.Manual, price);
+        assertEq(teth.balanceOf(address(vault)), 0);
     }
 
     function test_RevertWhen_TheSellPriceIsForged() public {

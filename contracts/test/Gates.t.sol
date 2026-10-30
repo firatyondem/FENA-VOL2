@@ -265,7 +265,7 @@ contract GateTwoTest is VaultTestBase {
 
     function test_RevertWhen_TheUserTookTheAssetOutOfTheRule() public {
         vm.prank(user);
-        vault.setRule(rule(), new bytes32[](0), new IVault.AssetRule[](0), watched());
+        vault.setRule(rule(), new bytes32[](0), new IVault.AssetRule[](0), new string[](0), watched());
         vm.warp(t0 + 31 minutes);
         IVault.SignedResponse memory p1 = signedPrice("2070");
 

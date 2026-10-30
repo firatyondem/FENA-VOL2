@@ -81,7 +81,7 @@ contract VaultTest is VaultTestBase {
 
         vm.prank(user);
         vm.expectRevert(IVault.InvalidRule.selector);
-        vault.setRule(rule(), twoAssets(), twoRules(eth, oil), watched());
+        vault.setRule(rule(), twoAssets(), twoRules(eth, oil), topics(2), watched());
     }
 
     function test_RevertWhen_TheBuyAmountIsAboveTheMaxPerTrade() public {
@@ -94,7 +94,7 @@ contract VaultTest is VaultTestBase {
 
         vm.prank(user);
         vm.expectRevert(IVault.InvalidRule.selector);
-        vault.setRule(invalid, assetIds, assetRules, watched());
+        vault.setRule(invalid, assetIds, assetRules, topics(1), watched());
     }
 
     function test_RevertWhen_TheAccountIsNotRegistered() public {
@@ -107,7 +107,7 @@ contract VaultTest is VaultTestBase {
 
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(IVault.AccountNotRegistered.selector, accounts[0]));
-        vault.setRule(rule(), assetIds, assetRules, accounts);
+        vault.setRule(rule(), assetIds, assetRules, topics(1), accounts);
     }
 
     function test_SetRule_ReplacesThePreviousAssets() public {
@@ -118,12 +118,50 @@ contract VaultTest is VaultTestBase {
         assetRules[0] = oilRule();
 
         vm.prank(user);
-        vault.setRule(rule(), assetIds, assetRules, watched());
+        vault.setRule(rule(), assetIds, assetRules, topics(1), watched());
 
         (bool isEthAllowed,) = vault.getAssetRule(user, ETH);
         (bool isOilAllowed,) = vault.getAssetRule(user, OIL);
         assertFalse(isEthAllowed);
         assertTrue(isOilAllowed);
+    }
+
+    function test_SetRule_EmitsTheTopicsForTheAgent() public {
+        bytes32[] memory assetIds = new bytes32[](1);
+        assetIds[0] = ETH;
+        IVault.AssetRule[] memory assetRules = new IVault.AssetRule[](1);
+        assetRules[0] = ethRule();
+        string[] memory assetTopics = new string[](1);
+        assetTopics[0] = "tariffs,crypto reserve";
+
+        vm.expectEmit(address(vault));
+        emit IVault.RuleSet(user, rule(), assetIds, assetRules, assetTopics, watched());
+        vm.prank(user);
+        vault.setRule(rule(), assetIds, assetRules, assetTopics, watched());
+    }
+
+    function test_RevertWhen_TheTopicsDoNotMatchTheAssets() public {
+        bytes32[] memory assetIds = new bytes32[](1);
+        assetIds[0] = ETH;
+        IVault.AssetRule[] memory assetRules = new IVault.AssetRule[](1);
+        assetRules[0] = ethRule();
+
+        vm.prank(user);
+        vm.expectRevert(IVault.InvalidRule.selector);
+        vault.setRule(rule(), assetIds, assetRules, topics(2), watched());
+    }
+
+    function test_RevertWhen_AProfileLetsTheAgentBuyWithoutATrend() public {
+        // Without a wait or a threshold, a P1 could equal P0, so the agent's say alone would buy.
+        IVault.AssetProfile memory noWait = oilProfile();
+        noWait.minWait = 0;
+        vm.expectRevert(IVault.InvalidRule.selector);
+        vault.setAssetProfile(OIL, noWait);
+
+        IVault.AssetProfile memory noThreshold = oilProfile();
+        noThreshold.minThresholdBps = 0;
+        vm.expectRevert(IVault.InvalidRule.selector);
+        vault.setAssetProfile(OIL, noThreshold);
     }
 
     function test_RevertWhen_SomeoneElseSetsAProfile() public {

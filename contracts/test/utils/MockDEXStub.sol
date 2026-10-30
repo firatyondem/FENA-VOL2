@@ -11,11 +11,14 @@ import {TestToken} from "./TestToken.sol";
 contract MockDEXStub is IMockDEX {
     address public immutable quoteToken;
 
+    error ZeroPrice();
+
     constructor(address quoteToken_) {
         quoteToken = quoteToken_;
     }
 
     function buy(address asset, uint256 quoteIn, uint256 price) external returns (uint256 assetOut) {
+        if (price == 0) revert ZeroPrice();
         TestToken(quoteToken).transferFrom(msg.sender, address(this), quoteIn);
         uint256 assetUnit = 10 ** TestToken(asset).decimals();
         uint256 quoteUnit = 10 ** TestToken(quoteToken).decimals();
@@ -25,6 +28,7 @@ contract MockDEXStub is IMockDEX {
     }
 
     function sell(address asset, uint256 assetIn, uint256 price) external returns (uint256 quoteOut) {
+        if (price == 0) revert ZeroPrice();
         TestToken(asset).transferFrom(msg.sender, address(this), assetIn);
         uint256 assetUnit = 10 ** TestToken(asset).decimals();
         uint256 quoteUnit = 10 ** TestToken(quoteToken).decimals();

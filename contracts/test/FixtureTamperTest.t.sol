@@ -35,7 +35,7 @@ contract FixtureTamperTest is VaultTestBase {
         IVault.AssetRule[] memory assetRules = new IVault.AssetRule[](1);
         assetRules[0] = ethRule();
         vm.prank(user);
-        vault.setRule(rule(), assetIds, assetRules, watched());
+        vault.setRule(rule(), assetIds, assetRules, topics(1), watched());
 
         vm.warp(ethUsd.timestamp + 10);
     }

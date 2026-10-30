@@ -52,6 +52,8 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
 
     mapping(uint256 triggerId => Trigger) private _triggers;
     mapping(uint256 positionId => Position) private _positions;
+    // The token that a position bought, so a later change to the asset's profile cannot make it sell another token
+    mapping(uint256 positionId => address token) private _positionTokens;
 
     constructor(address admin, address dex_) Ownable(admin) {
         dex = dex_;
@@ -63,12 +65,16 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
     // ---------------------------------------------------------------------------------------------------------------
 
     /// @inheritdoc IVault
-    /// @dev A profile with the zero token removes the asset, so no trigger can open or confirm for it.
+    /// @dev A profile with the zero token removes the asset, so no trigger can open or confirm for it. A profile needs a
+    /// wait and a threshold above zero, so a P1 always has to come later and higher than P0 and the agent can never buy
+    /// on its own say.
     function setAssetProfile(bytes32 assetId, AssetProfile calldata profile) external onlyOwner {
         if (
             profile.token != address(0)
                 && (profile.airnode == address(0)
+                    || profile.minThresholdBps == 0
                     || profile.minThresholdBps > profile.maxSpikeCapBps
+                    || profile.minWait == 0
                     || profile.minWait > profile.maxWindow
                     || profile.maxPriceAge == 0)
         ) revert InvalidRule();
@@ -109,11 +115,12 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
         Rule calldata rule,
         bytes32[] calldata assetIds,
         AssetRule[] calldata assetRules,
+        string[] calldata assetTopics,
         bytes32[] calldata watchedAccounts
     ) external {
         if (
             rule.agent == address(0) || rule.buyAmount == 0 || rule.buyAmount > rule.maxPerTrade
-                || assetIds.length != assetRules.length
+                || assetIds.length != assetRules.length || assetIds.length != assetTopics.length
         ) revert InvalidRule();
 
         _clearRule(msg.sender);
@@ -143,7 +150,7 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
         _rules[msg.sender] = rule;
         _assetIds[msg.sender] = assetIds;
         _watchedAccounts[msg.sender] = watchedAccounts;
-        emit RuleSet(msg.sender, rule, assetIds, assetRules, watchedAccounts);
+        emit RuleSet(msg.sender, rule, assetIds, assetRules, assetTopics, watchedAccounts);
     }
 
     /// @inheritdoc IVault
@@ -220,8 +227,10 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
         uint256 amount = _spend(user, assetId, assetRule);
 
         trigger.status = TriggerStatus.Confirmed;
-        uint256 assetOut = _buy(assetId, amount, p1Price);
+        address token = _assetProfiles[assetId].token;
+        uint256 assetOut = _buy(token, amount, p1Price);
         positionId = ++positionCount;
+        _positionTokens[positionId] = token;
         _positions[positionId] = Position({
             user: user,
             assetId: assetId,
@@ -275,7 +284,7 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
         }
 
         position.isOpen = false;
-        quoteOut = _sell(assetId, position.amount, price);
+        quoteOut = _sell(_positionTokens[positionId], position.amount, price);
         balanceOf[user] += quoteOut;
         emit PositionSold(positionId, user, reason, price, quoteOut);
     }
@@ -428,16 +437,14 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
     // ---------------------------------------------------------------------------------------------------------------
 
     /// @dev Counts what the DEX actually sent instead of trusting its return value.
-    function _buy(bytes32 assetId, uint256 quoteIn, uint256 price) private returns (uint256 assetOut) {
-        IERC20 asset = IERC20(_assetProfiles[assetId].token);
-        uint256 balanceBefore = asset.balanceOf(address(this));
+    function _buy(address asset, uint256 quoteIn, uint256 price) private returns (uint256 assetOut) {
+        uint256 balanceBefore = IERC20(asset).balanceOf(address(this));
         IERC20(quoteToken).forceApprove(dex, quoteIn);
-        IMockDEX(dex).buy(address(asset), quoteIn, price);
-        assetOut = asset.balanceOf(address(this)) - balanceBefore;
+        IMockDEX(dex).buy(asset, quoteIn, price);
+        assetOut = IERC20(asset).balanceOf(address(this)) - balanceBefore;
     }
 
-    function _sell(bytes32 assetId, uint256 assetIn, uint256 price) private returns (uint256 quoteOut) {
-        address asset = _assetProfiles[assetId].token;
+    function _sell(address asset, uint256 assetIn, uint256 price) private returns (uint256 quoteOut) {
         uint256 balanceBefore = IERC20(quoteToken).balanceOf(address(this));
         IERC20(asset).forceApprove(dex, assetIn);
         IMockDEX(dex).sell(asset, assetIn, price);
