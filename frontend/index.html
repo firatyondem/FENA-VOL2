@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Signal Vault</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="locked">
+
+<!-- ===== Ticker tape (practice prices) ===== -->
+<div class="ticker" aria-hidden="true"><div class="ticker-track" id="ticker"></div></div>
+
+<div class="wrap">
+  <!-- ===== Header ===== -->
+  <header class="top">
+    <div class="logo"><span class="logo-mark"></span>SIGNAL VAULT</div>
+    <div class="top-right">
+      <span class="chip" title="No blockchain yet: practice money and a practice contract"><span class="dot warn"></span>practice mode</span>
+      <button class="chip" id="profileChip" title="Your profile"><span class="avatar" id="avatarSmall">?</span><span id="profileChipName">log in</span></button>
+    </div>
+  </header>
+
+  <!-- ===== Hero ===== -->
+  <section class="hero">
+    <div>
+      <span class="eyebrow">powered by signed AirnodeHub data</span>
+      <h1>The AI proposes.<br><span>The contract decides.</span></h1>
+    </div>
+    <p>Set your rule once. An agent watches market-moving posts, but nothing is invested unless a signed price trend confirms it. Two checks, one decision.</p>
+  </section>
+
+  <!-- ===== Summary cards (the only place the balance is shown) ===== -->
+  <section class="stats">
+    <div class="card stat">
+      <div class="eyebrow">vault balance</div>
+      <div class="big" id="statVault">0.00</div>
+      <div class="unit">mUSDC</div>
+      <div class="status"><span class="dot ok" id="statusDot"></span><span id="statusText">all calm</span></div>
+    </div>
+    <div class="card stat">
+      <div class="eyebrow">spent today</div>
+      <div class="big" id="statSpent">0 / 0</div>
+      <div class="unit">mUSDC · used / daily limit</div>
+      <div class="bar"><div id="spentBar" style="width:0%"></div></div>
+    </div>
+    <div class="card stat">
+      <div class="eyebrow">open positions</div>
+      <div class="big" id="statPositions">0</div>
+      <div class="unit" id="statPositionAssets">nothing invested yet</div>
+    </div>
+  </section>
+
+  <!-- ===== Tabs ===== -->
+  <nav class="tabs">
+    <button class="tab active" data-tab="rule">Your rule</button>
+    <button class="tab" data-tab="money">Money</button>
+    <button class="tab" data-tab="activity">Activity</button>
+    <button class="tab" data-tab="history">History</button>
+    <button class="tab" data-tab="profile">Profile</button>
+  </nav>
+
+  <main>
+    <!-- ===== YOUR RULE ===== -->
+    <section class="panel" id="tab-rule">
+      <div class="explain">Your rule tells the vault <b>when it may invest and how much</b>. You set it once. The AI only spots posts; the contract checks every investment against this rule.</div>
+      <div class="grid2">
+        <div class="card">
+          <h2>1 · Who to watch</h2>
+          <p class="muted small" style="margin-top:-8px">Posts from these people can start an investment.</p>
+          <div class="watch" id="accountPicker"></div>
+          <h2 style="margin-top:30px">2 · What to invest in</h2>
+          <p class="muted small" style="margin-top:-8px">The vault can only invest in what you pick here. The AI can never add others.</p>
+          <div class="chips" id="assetPicker"></div>
+          <h2 style="margin-top:30px">3 · Priority and budget</h2>
+          <p class="muted small" style="margin-top:-8px">The <b>order</b> decides which asset goes first when a post fits several. The <b>share</b> decides how much of your daily limit each asset may use. Shares must add up to 100%.</p>
+          <div id="priorityList"></div>
+        </div>
+
+        <div class="card">
+          <div class="cond-head">
+            <h2>4 · When to invest</h2>
+            <span class="muted small">pre-filled with general defaults · confirm each value</span>
+          </div>
+          <div class="todo-note hidden" id="assetTodo" role="status"></div>
+          <div id="conditions"></div>
+
+          <h2 style="margin-top:30px">5 · Safety limits</h2>
+          <p class="muted small" style="margin-top:-8px">These apply to all assets together.</p>
+          <div class="sliders" id="limits"></div>
+
+          <div class="note">The market hours check is always on. Defaults describe how assets usually move. They are not advice.</div>
+
+          <h3>Your rule in one sentence</h3>
+          <p class="sentence" id="ruleSentence"></p>
+          <p class="small"><span class="muted" id="confirmCount"></span> <span class="error" id="ruleErrors"></span></p>
+          <div class="buttons">
+            <button class="btn primary" id="saveRuleBtn" disabled>Confirm &amp; save rule</button>
+            <button class="btn" id="pauseBtn" disabled>Pause rule</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== MONEY ===== -->
+    <section class="panel hidden" id="tab-money">
+      <div class="explain">Money <b>in the vault</b> is what your rule may invest. Only you can put money in or take it out. Practice mode uses play money (mUSDC).</div>
+      <div class="grid2 even">
+        <div class="card">
+          <h2>Deposit</h2>
+          <p class="muted small">Add money to your vault so your rule can invest it.</p>
+          <div class="field"><label for="depositInput">amount in mUSDC</label><input type="number" id="depositInput" min="0" placeholder="e.g. 1000"></div>
+          <div class="buttons" style="margin-top:14px"><button class="btn primary" id="depositBtn">Deposit</button></div>
+          <div class="error" id="depositError"></div>
+        </div>
+        <div class="card">
+          <h2>Withdraw</h2>
+          <p class="muted small">Take money out of your vault. Always works, even when your rule is paused.</p>
+          <div class="eyebrow" style="margin-top:14px">available in the vault</div>
+          <div class="kpi" id="vaultAvail">0.00</div>
+          <span class="muted small">money already invested is in your positions; sell it in History first</span>
+          <div class="field"><label for="withdrawInput">amount in mUSDC</label><input type="number" id="withdrawInput" min="0" placeholder="e.g. 500"></div>
+          <div class="buttons" style="margin-top:14px">
+            <button class="btn" id="withdrawBtn">Withdraw</button>
+            <button class="btn danger" id="withdrawAllBtn">Withdraw everything</button>
+          </div>
+          <div class="error" id="withdrawError"></div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h2>Today's budget per asset</h2>
+        <div id="budgetBars" class="muted small">Save a rule to see how much each asset may still use today.</div>
+      </div>
+    </section>
+
+    <!-- ===== ACTIVITY ===== -->
+    <section class="panel hidden" id="tab-activity">
+      <div class="card">
+        <div class="cond-head">
+          <h2>Live feed</h2>
+          <label class="toggle small" style="margin:0"><input type="checkbox" id="forceOpen" checked> pretend markets are open (practice only)</label>
+        </div>
+        <p class="muted" style="margin-top:0">In the real app, an <b style="color:var(--text)">AI agent</b> reads every new post from the people you watch, decides whether it's about one of your assets, and brings signed prices to the contract. <b style="color:var(--text)">In practice mode</b> you play example posts yourself (they're scripted, not real quotes) to see what happens step by step.</p>
+        <div class="pipeline" id="pipeline"></div>
+        <div class="next-step" id="nextStep" role="status"></div>
+      </div>
+
+      <div class="grid3" style="margin-top:16px">
+        <div class="card">
+          <h2>Posts <span class="badge info">check 1</span></h2>
+          <p class="muted small" style="margin-top:-8px">Was the post relevant to your rule?</p>
+          <div class="feed" id="feedPosts"><p class="muted small">Nothing yet.</p></div>
+        </div>
+        <div class="card">
+          <h2>Price checks <span class="badge info">check 2</span></h2>
+          <p class="muted small" style="margin-top:-8px">Did the signed price then rise within your range?</p>
+          <div class="feed" id="feedTriggers"><p class="muted small">Nothing yet.</p></div>
+        </div>
+        <div class="card">
+          <h2>Latest results</h2>
+          <p class="muted small" style="margin-top:-8px">Invested or blocked, and why.</p>
+          <div class="feed" id="feedResults"><p class="muted small">Nothing yet.</p></div>
+          <p><button class="link small" data-goto="history">See everything in History →</button></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== HISTORY ===== -->
+    <section class="panel hidden" id="tab-history">
+      <h2>At a glance</h2>
+      <div class="glance" id="glance"></div>
+      <div class="card" style="margin-top:16px">
+        <h2>All investments</h2>
+        <div class="filters">
+          <select id="fAsset" aria-label="filter by asset"><option value="">every asset</option></select>
+          <select id="fOutcome" aria-label="filter by outcome"><option value="">gain or loss</option><option value="gain">gain</option><option value="loss">loss</option></select>
+          <select id="fStatus" aria-label="filter by status"><option value="">open or closed</option><option value="open">open</option><option value="closed">closed</option></select>
+        </div>
+        <div id="investments"><p class="muted">Nothing invested yet.</p></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h2>Blocked by the contract</h2>
+        <p class="muted small" style="margin-top:-8px">Every attempt the safety checks stopped. No money moved.</p>
+        <div class="feed" id="blockedList"><p class="muted small">Nothing blocked yet.</p></div>
+      </div>
+    </section>
+
+    <!-- ===== PROFILE ===== -->
+    <section class="panel hidden" id="tab-profile">
+      <div class="card">
+        <div class="profile-head">
+          <div class="avatar big" id="avatarBig">?</div>
+          <div>
+            <div style="font-size:1.4rem;font-weight:700" id="profileTitle"></div>
+            <div class="mono muted small" id="profileAddress"></div>
+          </div>
+          <div class="buttons" style="margin-left:auto">
+            <button class="btn small" id="logoutBtn">Log out</button>
+          </div>
+        </div>
+        <p class="muted small" style="margin-bottom:0">Your personal details are stored in this browser only and are never written on-chain.</p>
+      </div>
+      <div class="grid2 even" style="margin-top:16px">
+        <div class="card">
+          <div class="cond-head"><h2>Personal details</h2><button class="btn small" id="editDetailsBtn">Edit</button></div>
+          <dl class="details" id="detailsView"></dl>
+          <form id="detailsForm" class="hidden">
+            <div class="field"><label for="fFirstName">first name</label><input type="text" id="fFirstName" maxlength="40" required></div>
+            <div class="field"><label for="fLastName">last name</label><input type="text" id="fLastName" maxlength="40" required></div>
+            <div class="field"><label for="fDob">date of birth</label><input type="date" id="fDob" min="1900-01-01" max="9999-12-31" required></div>
+            <div class="field"><label for="fCountry">country</label><select id="fCountry" required></select></div>
+            <div class="field"><label for="fCity">city</label><input type="text" id="fCity" maxlength="60"></div>
+            <div class="error" id="detailsError"></div>
+            <div class="buttons" style="margin-top:16px"><button type="submit" class="btn primary">Save</button><button type="button" class="btn" id="cancelDetailsBtn">Cancel</button></div>
+          </form>
+        </div>
+        <div class="stack">
+          <div class="card">
+            <h2>Settings</h2>
+            <label class="toggle"><input type="checkbox" id="presenterToggle"> Presenter mode (bigger text for the stage)</label>
+            <label class="toggle"><input type="checkbox" id="confirmToggle"> Ask me before every transaction</label>
+          </div>
+          <div class="card" style="border-color:rgba(242,85,77,.35)">
+            <h2>Delete account</h2>
+            <button class="btn danger" id="deleteBtn">Delete my account</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== FOR JUDGES: TAMPER TEST (reached from the footer) ===== -->
+    <section class="panel hidden" id="tab-tamper">
+      <div class="explain"><b>For judges.</b> This page proves the contract can't be tricked. Each button sends signed price data to the contract: the first is real and fresh and must be accepted; the others are faked in one way each and must be blocked before any money moves. You can also paste your own signed response.</div>
+      <div class="card">
+        <div class="buttons" id="tamperButtons">
+          <button class="btn primary" data-kind="valid">Real, fresh response</button>
+          <button class="btn" data-kind="edited">1 · One value edited</button>
+          <button class="btn" data-kind="stale">2 · Too old</button>
+          <button class="btn" data-kind="wrongRequest">3 · Different request</button>
+          <button class="btn" data-kind="wrongSigner">4 · Wrong signer</button>
+          <button class="btn" data-kind="replay">Same response twice</button>
+        </div>
+      </div>
+      <div class="grid2 even" style="margin-top:16px">
+        <div class="card">
+          <h2>Response sent</h2>
+          <pre class="code" id="tamperJson">Click a button above.</pre>
+          <p class="muted small">Paste your own signed response:</p>
+          <textarea id="judgeJson" placeholder='{"requestHash":"0x…","timestamp":1793000000,"data":{"price":3400},"signature":"0x…"}'></textarea>
+          <button class="btn" id="judgeSubmitBtn" style="margin-top:10px">Submit pasted response</button>
+        </div>
+        <div class="card">
+          <h2>Contract result</h2>
+          <div class="feed" id="tamperResults"><p class="muted small">Results appear here.</p></div>
+        </div>
+      </div>
+      <p><button class="link small" data-goto="rule">← back to the app</button></p>
+    </section>
+  </main>
+
+  <!-- ===== Footer: how it works + judges link ===== -->
+  <footer>
+    <div>
+      <b style="color:var(--text)">How it works</b>
+      <ol>
+        <li>A post from someone you watch is about one of your assets.</li>
+        <li>A signed price shows that asset then rose within your range. Only then the contract invests.</li>
+      </ol>
+    </div>
+    <div style="text-align:right">
+      <button class="link small" data-goto="tamper">For judges: verify the contract (tamper test) →</button>
+      <div style="margin-top:6px">Testnet prototype with practice tokens. Not investment advice.</div>
+    </div>
+  </footer>
+</div>
+
+<!-- ===== Login / register (opens on arrival and whenever a logged-out visitor clicks anything) ===== -->
+<div class="modal" id="loginModal" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+  <div class="modal-card">
+    <div class="logo"><span class="logo-mark"></span>SIGNAL VAULT</div>
+    <div class="modal-tabs">
+      <button class="active" data-auth="login" id="loginTitle">Log in</button>
+      <button data-auth="register">Create account</button>
+    </div>
+
+    <form id="loginForm">
+      <div class="field"><label for="lUser">username</label><input type="text" id="lUser" autocomplete="username" required></div>
+      <div class="field"><label for="lPass">password</label><input type="password" id="lPass" autocomplete="current-password" required></div>
+      <div class="error" id="loginError"></div>
+      <button class="btn primary" style="width:100%;margin-top:18px">Log in</button>
+    </form>
+
+    <form id="registerForm" class="hidden">
+      <div class="two">
+        <div class="field"><label for="rFirstName">first name</label><input type="text" id="rFirstName" maxlength="40" autocomplete="given-name" required></div>
+        <div class="field"><label for="rLastName">last name</label><input type="text" id="rLastName" maxlength="40" autocomplete="family-name" required></div>
+      </div>
+      <div class="field"><label for="rDob">date of birth</label><input type="date" id="rDob" min="1900-01-01" max="9999-12-31" required></div>
+      <div class="two">
+        <div class="field"><label for="rCountry">country</label><select id="rCountry" required></select></div>
+        <div class="field"><label for="rCity">city</label><input type="text" id="rCity" maxlength="60"></div>
+      </div>
+      <div class="two">
+        <div class="field"><label for="rUser">username</label><input type="text" id="rUser" autocomplete="username" required minlength="3" maxlength="30"></div>
+        <div class="field"><label for="rPass">password</label><input type="password" id="rPass" autocomplete="new-password" required minlength="8"></div>
+      </div>
+      <div class="error" id="registerError"></div>
+      <button class="btn primary" style="width:100%;margin-top:18px">Create account</button>
+      <p class="muted small" style="margin-bottom:0">You must be 18 or older.</p>
+    </form>
+    <p class="muted small" style="margin-bottom:0">Practice login: accounts are stored in this browser only.
+      <button class="link small" id="browseBtn" type="button">Look around first</button></p>
+  </div>
+</div>
+
+<script src="js/config.js"></script>
+<script src="js/mock.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
