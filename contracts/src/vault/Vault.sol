@@ -5,6 +5,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IMockDEX} from "../interfaces/IMockDEX.sol";
 import {IVault} from "../interfaces/IVault.sol";
 import {AirnodeV2Attestation} from "../lib/AirnodeV2Attestation.sol";
@@ -15,6 +16,10 @@ import {ProjectedJson} from "../lib/ProjectedJson.sol";
 /// data and the user's stored rule. A wrong, buggy or malicious agent can only submit triggers that revert.
 contract Vault is IVault, Ownable, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
+
+    /// @notice The DEX delivered less than the output it returned for a swap
+    /// @dev Declared here and not in IVault, which stays frozen.
+    error DexDeliveredLess(uint256 promised, uint256 delivered);
 
     /// @notice Longest time from an Airnode signing a response to the vault accepting it
     uint256 public constant MAX_RESPONSE_AGE = 5 minutes;
@@ -397,7 +402,8 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
         }
 
         uint256 day = block.timestamp / 1 days;
-        uint256 budget = rule.dailyLimit * assetRule.budgetShareBps / BPS;
+        // mulDiv, so any daily limit works, up to type(uint256).max for "no limit"
+        uint256 budget = Math.mulDiv(rule.dailyLimit, assetRule.budgetShareBps, BPS);
         uint256 spent = _spent[user][assetId][day];
         if (spent + amount > budget) revert DailyBudgetExceeded(amount, budget > spent ? budget - spent : 0);
 
@@ -409,10 +415,12 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
         _lastBuyAt[user][assetId] = block.timestamp;
     }
 
-    /// @dev Take-profit off (0) never sells.
+    /// @dev Take-profit off (0) never sells. The target rounds up, so a price below entry * (1 + take-profit) by less than
+    /// a wei does not sell, as exact as the trend and stagnation checks.
     function _checkTakeProfit(uint256 price, uint256 entryPrice, AssetRule memory assetRule) private pure {
-        uint256 target =
-            assetRule.takeProfitBps == 0 ? type(uint256).max : entryPrice * (BPS + assetRule.takeProfitBps) / BPS;
+        uint256 target = assetRule.takeProfitBps == 0
+            ? type(uint256).max
+            : Math.ceilDiv(entryPrice * (BPS + assetRule.takeProfitBps), BPS);
         if (price < target) revert TakeProfitNotReached(price, target);
     }
 
@@ -436,19 +444,21 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
     // Swaps and rule storage
     // ---------------------------------------------------------------------------------------------------------------
 
-    /// @dev Counts what the DEX actually sent instead of trusting its return value.
+    /// @dev Counts what the DEX actually sent, and reverts if that is less than the output it returned.
     function _buy(address asset, uint256 quoteIn, uint256 price) private returns (uint256 assetOut) {
         uint256 balanceBefore = IERC20(asset).balanceOf(address(this));
         IERC20(quoteToken).forceApprove(dex, quoteIn);
-        IMockDEX(dex).buy(asset, quoteIn, price);
+        uint256 promised = IMockDEX(dex).buy(asset, quoteIn, price);
         assetOut = IERC20(asset).balanceOf(address(this)) - balanceBefore;
+        if (assetOut < promised) revert DexDeliveredLess(promised, assetOut);
     }
 
     function _sell(address asset, uint256 assetIn, uint256 price) private returns (uint256 quoteOut) {
         uint256 balanceBefore = IERC20(quoteToken).balanceOf(address(this));
         IERC20(asset).forceApprove(dex, assetIn);
-        IMockDEX(dex).sell(asset, assetIn, price);
+        uint256 promised = IMockDEX(dex).sell(asset, assetIn, price);
         quoteOut = IERC20(quoteToken).balanceOf(address(this)) - balanceBefore;
+        if (quoteOut < promised) revert DexDeliveredLess(promised, quoteOut);
     }
 
     function _clearRule(address user) private {
