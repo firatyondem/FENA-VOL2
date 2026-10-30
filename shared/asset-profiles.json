@@ -1,0 +1,144 @@
+{
+  "$comment": "Default rule parameters per asset (spec: Asset profiles). Users may make a profile stricter, never looser. Percentages are basis points (100 = 1%), times are seconds, prices are read with 18 decimals.",
+  "version": 1,
+  "priceDecimals": 18,
+  "usdcDecimals": 6,
+  "maxPriceAgeSec": 300,
+  "maxTweetToP0Sec": 600,
+  "ruleDefaults": {
+    "maxPerTradeBps": 500,
+    "dailyLimitBps": 2000,
+    "cooldownSec": 86400,
+    "takeProfitBps": 800,
+    "stagnationBandBps": 100,
+    "stagnationAfterSec": 86400,
+    "stopLossBps": 500
+  },
+  "demoOverrides": {
+    "minWaitSec": 120,
+    "maxWindowSec": 600,
+    "cooldownSec": 60,
+    "stagnationAfterSec": 600
+  },
+  "airnodes": {
+    "nodary": {
+      "url": "https://airnode-nodary.fly.dev/",
+      "address": "0xE70f1e8b22a21e4Bb5188918a3033341b281E4c0"
+    },
+    "tickerlayer": {
+      "url": "https://airnode-tickerlayer.fly.dev/",
+      "address": "0x32f5eA20F05fdADfCD50Cb8eD920acE96D5f9f2c"
+    },
+    "twitterapi": {
+      "url": "https://airnode-twitterapi.fly.dev/",
+      "address": "0x7B02Fd3324D2dC362f65a9c01e59EC5fDb4E1CCB"
+    }
+  },
+  "assets": {
+    "ETH": {
+      "name": "Ether",
+      "token": { "symbol": "tETH", "name": "Test Ether", "decimals": 18 },
+      "market": "24/7",
+      "trendThresholdBps": 300,
+      "spikeCapBps": 1200,
+      "minWaitSec": 1800,
+      "maxWindowSec": 14400,
+      "price": {
+        "airnode": "nodary",
+        "operation": "latestFeeds",
+        "parameters": { "name": "ETH/USD" },
+        "responseProjection": { "price": "/ETH~1USD/value", "updatedAt": "/ETH~1USD/timestamp" },
+        "timeField": "updatedAt",
+        "timeUnit": "ms"
+      },
+      "suggestedTopics": ["crypto reserve", "SEC", "crypto rules", "stablecoin law", "Fed", "interest rates", "Ethereum"]
+    },
+    "BTC": {
+      "name": "Bitcoin",
+      "token": { "symbol": "tBTC", "name": "Test Bitcoin", "decimals": 18 },
+      "market": "24/7",
+      "trendThresholdBps": 300,
+      "spikeCapBps": 1200,
+      "minWaitSec": 1800,
+      "maxWindowSec": 14400,
+      "price": {
+        "airnode": "nodary",
+        "operation": "latestFeeds",
+        "parameters": { "name": "BTC/USD" },
+        "responseProjection": { "price": "/BTC~1USD/value", "updatedAt": "/BTC~1USD/timestamp" },
+        "timeField": "updatedAt",
+        "timeUnit": "ms"
+      },
+      "suggestedTopics": ["Bitcoin", "strategic bitcoin reserve", "crypto capital", "SEC", "crypto rules", "Fed"]
+    },
+    "DOGE": {
+      "name": "Dogecoin",
+      "token": { "symbol": "tDOGE", "name": "Test Dogecoin", "decimals": 18 },
+      "market": "24/7",
+      "$comment": "DOGE moves more than ETH, so its limits are wider (spec: Account to investment areas).",
+      "trendThresholdBps": 500,
+      "spikeCapBps": 2000,
+      "minWaitSec": 1800,
+      "maxWindowSec": 14400,
+      "price": {
+        "airnode": "nodary",
+        "operation": "latestFeeds",
+        "parameters": { "name": "DOGE/USD" },
+        "responseProjection": { "price": "/DOGE~1USD/value", "updatedAt": "/DOGE~1USD/timestamp" },
+        "timeField": "updatedAt",
+        "timeUnit": "ms"
+      },
+      "suggestedTopics": ["Dogecoin", "doge", "shiba", "meme coin", "to the moon"]
+    },
+    "TSLA": {
+      "name": "Tesla",
+      "token": { "symbol": "tTSLA", "name": "Test Tesla", "decimals": 18 },
+      "market": "exchange-hours",
+      "trendThresholdBps": 200,
+      "spikeCapBps": 800,
+      "minWaitSec": 3600,
+      "maxWindowSec": 23400,
+      "price": {
+        "airnode": "tickerlayer",
+        "operation": "lastTrade",
+        "parameters": { "assetClass": "stocks", "symbol": "US:TSLA" },
+        "responseProjection": { "price": "/price", "updatedAt": "/timestamp" },
+        "timeField": "updatedAt",
+        "timeUnit": "ms",
+        "$todo": "Confirm the unit of lastTrade.timestamp with one paid call"
+      },
+      "suggestedTopics": ["Tesla", "EV tax credit", "EV mandate", "auto tariffs", "China tariffs", "self-driving", "robotaxi"]
+    },
+    "OIL": {
+      "name": "Crude oil (WTI)",
+      "token": { "symbol": "tOIL", "name": "Test Crude Oil", "decimals": 18 },
+      "market": "24/5",
+      "trendThresholdBps": 150,
+      "spikeCapBps": 500,
+      "minWaitSec": 3600,
+      "maxWindowSec": 21600,
+      "price": {
+        "airnode": "tickerlayer",
+        "operation": "lastTrade",
+        "parameters": { "assetClass": "commodities", "symbol": "WTIUSD" },
+        "responseProjection": { "price": "/price", "updatedAt": "/timestamp" },
+        "timeField": "updatedAt",
+        "timeUnit": "ms",
+        "$todo": "Confirm the unit of lastTrade.timestamp with one paid call"
+      },
+      "suggestedTopics": [
+        "Venezuela",
+        "Iran",
+        "Strait of Hormuz",
+        "Saudi Arabia",
+        "OPEC",
+        "Russia sanctions",
+        "Middle East conflict",
+        "drilling",
+        "pipeline",
+        "strategic petroleum reserve",
+        "energy tariffs"
+      ]
+    }
+  }
+}
