@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>The Wire Desk</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap"
+    />
+    <link rel="stylesheet" href="/console.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="masthead__rail">
+        <span id="edition">Agent console</span>
+        <span class="live" id="live"><span class="live__dot" aria-hidden="true"></span><span id="live-text">Connecting</span></span>
+        <time id="clock" class="masthead__clock">--:--:-- UTC</time>
+      </div>
+      <h1 class="masthead__title">The Wire Desk</h1>
+      <p class="masthead__motto">The AI proposes. The contract decides.</p>
+      <dl class="facts" id="facts"></dl>
+    </header>
+
+    <ul class="tally" id="tally" aria-label="Totals"></ul>
+    <div class="notices" id="notices" role="status" aria-live="polite"></div>
+
+    <main class="desk">
+      <section class="column" aria-labelledby="wire-head">
+        <h2 class="column__head" id="wire-head"><span class="column__no">I</span>The Wire</h2>
+        <p class="column__dek">New posts from watched accounts, and what the model made of them.</p>
+        <ol class="wire" id="wire"></ol>
+        <p class="empty" id="wire-empty">No posts yet. The agent polls each account on its interval.</p>
+      </section>
+
+      <section class="column" aria-labelledby="gates-head">
+        <h2 class="column__head" id="gates-head"><span class="column__no">II</span>The Gates</h2>
+        <p class="column__dek">Each trigger waits for a signed price inside its window. Only the vault can buy.</p>
+        <ol class="gates" id="gates"></ol>
+        <p class="empty" id="gates-empty">No triggers. A relevant post with a fresh signed price opens one.</p>
+      </section>
+
+      <section class="column" aria-labelledby="ledger-head">
+        <h2 class="column__head" id="ledger-head"><span class="column__no">III</span>The Ledger</h2>
+        <p class="column__dek">What the vault executed, at the exact signed price.</p>
+        <table class="ledger" id="ledger">
+          <thead>
+            <tr><th scope="col">Time</th><th scope="col">Side</th><th scope="col">Asset</th><th scope="col" class="num">Price</th><th scope="col" class="num">USDC</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p class="empty" id="ledger-empty">Nothing executed yet.</p>
+
+        <h3 class="subhead">Tamper bench</h3>
+        <p class="column__dek">Forged and stale responses sent to the vault. Each should be refused.</p>
+        <table class="ledger tamper" id="tamper">
+          <thead>
+            <tr><th scope="col">Test · expected revert</th><th scope="col">Vault said</th><th scope="col"><span class="visually-hidden">Result</span></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p class="empty" id="tamper-empty">Run <code>npm run tamper-demo</code>, or start the replay, to fill this in.</p>
+      </section>
+    </main>
+
+    <footer class="colophon">
+      <p>Posts and prices arrive signed by API3 Airnodes (TwitterAPI.io, Nodary, TickerLayer). This page shows the agent's explanation log; the vault never reads it.</p>
+    </footer>
+
+    <template id="post-template">
+      <li class="post">
+        <div class="post__meta"><time class="post__time"></time><span class="post__account"></span></div>
+        <blockquote class="post__text"></blockquote>
+        <ul class="verdicts"></ul>
+      </li>
+    </template>
+
+    <template id="trigger-template">
+      <li class="trigger">
+        <div class="trigger__head">
+          <span class="trigger__no"></span>
+          <span class="trigger__asset"></span>
+          <span class="trigger__via"></span>
+          <span class="stamp"></span>
+        </div>
+        <div class="gate">
+          <span class="gate__label">Gate 1</span>
+          <p class="gate__body gate__body--one"></p>
+        </div>
+        <div class="gate">
+          <span class="gate__label">Gate 2</span>
+          <div class="gate__body">
+            <div class="track" role="img">
+              <span class="track__eligible"></span>
+              <span class="track__now"></span>
+            </div>
+            <div class="track__legend"><span class="track__start"></span><span class="track__opens"></span><span class="track__closes"></span></div>
+            <div class="scale" role="img">
+              <span class="scale__threshold"></span>
+              <span class="scale__mark"></span>
+            </div>
+            <p class="scale__legend"></p>
+          </div>
+        </div>
+        <p class="trigger__outcome"></p>
+      </li>
+    </template>
+
+    <script type="module" src="/console.js"></script>
+  </body>
+</html>
