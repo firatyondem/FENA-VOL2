@@ -5,7 +5,6 @@ import { type Address, createPublicClient, createWalletClient, type Hex, http, i
 import { privateKeyToAccount } from 'viem/accounts';
 import { baseSepolia, foundry } from 'viem/chains';
 import { createPayingFetch, fetchSignedResponse, withSettlementReporting } from './airnode/client.ts';
-import type { Rule } from './chain/vault.ts';
 import { ViemVault } from './chain/viem-vault.ts';
 import type { Classifier } from './classifier/types.ts';
 import { SellKeeper } from './engine/keeper.ts';
@@ -36,23 +35,20 @@ export interface LiveOptions {
 
 export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
   const rpcUrl = requireEnv('RPC_URL');
-  const vaultAddress = requireEnv('VAULT_ADDRESS');
-  if (!isAddress(vaultAddress)) throw new Error('VAULT_ADDRESS is not an address');
   const chain = Number(process.env.CHAIN_ID ?? baseSepolia.id) === foundry.id ? foundry : baseSepolia;
   const account = privateKeyToAccount(requireKey('AGENT_PRIVATE_KEY'));
 
-  const deployment = readJson<{ assets: Record<string, Address> }>(
+  // Written by contracts/script/Deploy.s.sol
+  const deployment = readJson<{ vault: Address; deployedAtBlock: number }>(
     new URL(`../../shared/deployments/${chain.id}.json`, import.meta.url)
   );
+  const vaultAddress = process.env.VAULT_ADDRESS ?? deployment.vault;
+  if (!isAddress(vaultAddress)) throw new Error('VAULT_ADDRESS is not an address');
   const watchlist = readJson<WatchedAccount[]>(new URL('../config/watchlist.json', import.meta.url));
   if (process.env.DEMO_X_HANDLE) {
     // Our own account for the live stage post, linked like Trump's (spec: our demo account)
     watchlist.push({ handle: process.env.DEMO_X_HANDLE, label: 'Demo account', assets: ['OIL', 'BTC', 'ETH'], pinned: false });
   }
-  const rulesFile = process.env.RULES_FILE ?? new URL('../config/rules.json', import.meta.url);
-  const rules = readJson<Omit<Rule, 'agent'>[]>(new URL(rulesFile, import.meta.url)).map(
-    (rule): Rule => ({ ...rule, agent: account.address })
-  );
 
   const payerKey = process.env.PAYER_PRIVATE_KEY;
   const airnodeFetch: typeof fetch =
@@ -64,12 +60,14 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
 
   const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
   const walletClient = createWalletClient({ chain, transport: http(rpcUrl), account });
+  // The users whose rule names this agent's wallet, read from the vault
   const vault = new ViemVault({
     address: vaultAddress,
     publicClient: publicClient as never,
     walletClient,
-    assets: deployment.assets,
-    rules,
+    profiles,
+    watchlist,
+    fromBlock: BigInt(deployment.deployedAtBlock),
   });
 
   const twitter = profiles.airnodes.twitterapi;

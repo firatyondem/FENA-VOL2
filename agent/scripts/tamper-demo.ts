@@ -33,8 +33,8 @@ if (!VAULT_ADDRESS || !TRIGGER_ID) {
     address: VAULT_ADDRESS,
     publicClient: createPublicClient({ chain, transport: http(RPC_URL) }) as never,
     walletClient: createWalletClient({ chain, transport: http(RPC_URL), account }),
-    assets: {},
-    rules: [],
+    profiles,
+    watchlist: [],
   });
   const fetchPrice = (key: string) => {
     const asset = getAsset(profiles, key);
