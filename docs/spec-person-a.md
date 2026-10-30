@@ -79,7 +79,7 @@ Keys and API secrets stay in `.env` files, never in the repo or prompts.
 
 ### Scope
 
-wBuild the MVP rows of the feature table first, on ETH/USD from the official starter, then swap in a stock feed if AirnodeHub lists one.
+Build the MVP rows of the feature table first, on ETH/USD from the official starter, then swap in a stock feed if AirnodeHub lists one.
 
 - **Fallback asset:** ETH (the starter already provides a signed ETH/USD response).
 - **Out of scope:** real stock purchases, a real DEX (Uniswap etc.), mainnet deployment, predicting prices, and letting the AI's opinion move funds.
