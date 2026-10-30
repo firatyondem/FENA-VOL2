@@ -23,6 +23,8 @@ const sell = { cooldownSec: 60, takeProfitBps: 800, stopLossBps: 500, stagnation
 class StubClassifier implements Classifier {
   readonly name = 'stub';
   calls = 0;
+  // Calls that fail as an unreachable API would, before the answers come
+  outages = 0;
   private readonly answers: Record<string, [boolean, number]>;
 
   constructor(answers: Record<string, [boolean, number]>) {
@@ -31,6 +33,10 @@ class StubClassifier implements Classifier {
 
   async classify(_post: unknown, candidates: Candidate[]): Promise<Classification[]> {
     this.calls += 1;
+    if (this.outages > 0) {
+      this.outages -= 1;
+      throw new Error('503 overloaded');
+    }
     return candidates
       .filter((candidate) => this.answers[candidate.asset])
       .map((candidate) => {
@@ -54,7 +60,12 @@ const setup = ({
   oilAirnode = fixtureAirnode,
 }: Scenario = {}) => {
   const clock = { now: P0_TIME + 60 };
-  const state = { post, prices: { ETH: 'eth-p0.json', OIL: 'oil-p0.json', ...prices } as Record<string, string> };
+  const state = {
+    post,
+    prices: { ETH: 'eth-p0.json', OIL: 'oil-p0.json', ...prices } as Record<string, string>,
+    // Price fetches that fail as an unreachable Airnode would, per asset
+    priceOutages: {} as Record<string, number>,
+  };
   const rule: Rule = {
     id: 'r1',
     owner: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
@@ -89,7 +100,13 @@ const setup = ({
     now: () => clock.now,
     tweetAirnode: fixtureAirnode,
     fetchLatestPost: async () => fixture(state.post),
-    fetchPrice: async (asset) => fixture(state.prices[asset] as string),
+    fetchPrice: async (asset) => {
+      if ((state.priceOutages[asset] ?? 0) > 0) {
+        state.priceOutages[asset] = (state.priceOutages[asset] ?? 0) - 1;
+        throw new Error('fetch failed');
+      }
+      return fixture(state.prices[asset] as string);
+    },
   });
   const kinds = () => log.recent().map((event) => event.kind);
   const last = <K extends LoggedEvent['kind']>(kind: K) =>
@@ -219,4 +236,43 @@ test('P1 is fetched at most once per interval', async () => {
   clock.now = P0_TIME + 330;
   await engine.checkPending();
   assert.equal(kinds().filter((kind) => kind === 'trigger.checked').length, 1);
+});
+
+test('a classifier outage is retried on the next poll, so the post is not lost', async () => {
+  const { engine, classifier, kinds } = setup();
+  classifier.outages = 1;
+  await engine.pollAccount(trump);
+  assert.deepEqual(kinds(), ['post.seen', 'error']);
+  await engine.pollAccount(trump);
+  assert.deepEqual(kinds(), ['post.seen', 'error', 'post.classified', 'trigger.opened']);
+  assert.equal(classifier.calls, 2);
+});
+
+test('a failed P0 fetch is retried without reopening the assets that opened', async () => {
+  const { engine, classifier, state, log } = setup({ answers: { OIL: [true, 0.8], ETH: [true, 0.95] } });
+  state.priceOutages.OIL = 1;
+  await engine.pollAccount(trump);
+  await engine.pollAccount(trump);
+  await engine.pollAccount(trump);
+  const triggerEvents = log.recent().filter((event) => event.kind.startsWith('trigger.'));
+  assert.deepEqual(
+    triggerEvents.map((event) => [event.kind, 'asset' in event ? event.asset : '']),
+    [
+      ['trigger.opened', 'ETH'],
+      ['trigger.opened', 'OIL'],
+    ]
+  );
+  assert.equal(classifier.calls, 1, 'the answer is kept, not asked again');
+});
+
+test('a refusal by the vault is final, not retried', async () => {
+  const { engine, classifier, log } = setup({
+    answers: { OIL: [true, 0.8] },
+    oilAirnode: '0x9aAD9AF9D2d0B9429F6e1C18FA733F41926BC678',
+  });
+  await engine.pollAccount(trump);
+  const before = log.recent().length;
+  await engine.pollAccount(trump);
+  assert.equal(log.recent().length, before);
+  assert.equal(classifier.calls, 1);
 });

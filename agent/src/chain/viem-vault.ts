@@ -47,17 +47,19 @@ export const toVaultResponse = ({ requestHash, timestamp, data, signature }: Sig
 
 const SELL_REASONS: Partial<Record<SellKind, number>> = { manual: 0, 'take-profit': 1, stagnation: 2 };
 
-// The custom error name of a revert, or the message when the error is not a revert.
-export const revertReason = (error: unknown): string => {
-  if (error instanceof BaseError) {
-    const revert = error.walk((cause) => cause instanceof ContractFunctionRevertedError);
-    if (revert instanceof ContractFunctionRevertedError) {
-      return revert.data?.errorName ?? revert.reason ?? revert.signature ?? 'Reverted';
-    }
-    return error.shortMessage;
-  }
-  return error instanceof Error ? error.message : String(error);
+// The custom error name when `error` is a revert, so the vault refused; undefined for anything else, such as an RPC that
+// did not answer, which says nothing about the request.
+export const revertName = (error: unknown): string | undefined => {
+  if (!(error instanceof BaseError)) return undefined;
+  const revert = error.walk((cause) => cause instanceof ContractFunctionRevertedError);
+  if (!(revert instanceof ContractFunctionRevertedError)) return undefined;
+  return revert.data?.errorName ?? revert.reason ?? revert.signature ?? 'Reverted';
 };
+
+// The custom error name of a revert, or the message when the error is not a revert.
+export const revertReason = (error: unknown): string =>
+  revertName(error) ??
+  (error instanceof BaseError ? error.shortMessage : error instanceof Error ? error.message : String(error));
 
 type EventName = 'TriggerOpened' | 'TriggerConfirmed' | 'PositionSold' | 'TriggerExpired' | 'RuleSet';
 
@@ -234,7 +236,10 @@ export class ViemVault implements VaultPort {
       return { hash, logs: receipt.logs };
     } catch (error) {
       if (error instanceof VaultRejection) throw error;
-      throw new VaultRejection(revertReason(error));
+      // Only a revert is the vault saying no; any other failure passes through, so the caller can try again
+      const name = revertName(error);
+      if (name) throw new VaultRejection(name);
+      throw error;
     }
   }
 

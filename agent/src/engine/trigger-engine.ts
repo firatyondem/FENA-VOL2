@@ -47,7 +47,12 @@ const errorMessage = (error: unknown) => (error instanceof Error ? error.message
 
 export class TriggerEngine {
   private readonly deps: TriggerEngineDeps;
+  // Posts already logged, posts fully handled, and the answer for each post the classifier gave one for
   private readonly seenPosts = new Set<string>();
+  private readonly donePosts = new Set<string>();
+  private readonly classifications = new Map<string, Classification[]>();
+  // Post, rule and asset combinations that opened or that the vault refused for good
+  private readonly settled = new Set<string>();
   private readonly pending = new Map<string, PendingTrigger>();
 
   constructor(deps: TriggerEngineDeps) {
@@ -58,7 +63,9 @@ export class TriggerEngine {
     return [...this.pending.values()];
   }
 
-  // One poll of one watched account: at most one new post, classified once for every rule that watches the account.
+  // One poll of one watched account: at most one new post, classified once for every rule that watches the account. A
+  // post is done once every relevant asset opened or was refused; a passing outage (the model's API, a price fetch, the
+  // RPC) leaves it for the next poll, while the post is still young enough for a P0.
   async pollAccount(account: WatchedAccount): Promise<void> {
     const { log, now, profiles } = this.deps;
     let post: Post;
@@ -70,39 +77,57 @@ export class TriggerEngine {
       log.append({ kind: 'error', where: `poll @${account.handle}`, message: errorMessage(error) });
       return;
     }
-    const seenKey = `${account.handle}:${post.id}`;
-    if (this.seenPosts.has(seenKey)) return;
-    this.seenPosts.add(seenKey);
-    log.append({ kind: 'post.seen', account: account.handle, postId: post.id, text: post.text, createdAt: post.createdAt });
+    const postKey = `${account.handle}:${post.id}`;
+    if (this.donePosts.has(postKey)) return;
+    if (!this.seenPosts.has(postKey)) {
+      this.seenPosts.add(postKey);
+      log.append({ kind: 'post.seen', account: account.handle, postId: post.id, text: post.text, createdAt: post.createdAt });
+    }
+    const skipPost = (reason: string) => {
+      this.donePosts.add(postKey);
+      log.append({ kind: 'post.skipped', account: account.handle, postId: post.id, reason });
+    };
 
-    if (now() - post.createdAt > profiles.maxTweetToP0Sec) {
-      log.append({ kind: 'post.skipped', account: account.handle, postId: post.id, reason: 'older than the P0 window' });
+    if (now() - post.createdAt > profiles.maxTweetToP0Sec) return skipPost('older than the P0 window');
+    let rules: Rule[];
+    try {
+      rules = (await this.deps.vault.listRules()).filter((rule) => !rule.paused && rule.accounts[account.handle]);
+    } catch (error) {
+      log.append({ kind: 'error', where: 'reading rules, will retry', message: errorMessage(error) });
       return;
     }
-    const rules = (await this.deps.vault.listRules()).filter((rule) => !rule.paused && rule.accounts[account.handle]);
     const candidates = this.candidatesFor(account, rules);
     const skip = prefilter(post, candidates);
-    if (skip) {
-      log.append({ kind: 'post.skipped', account: account.handle, postId: post.id, reason: skip });
-      return;
-    }
+    if (skip) return skipPost(skip);
 
-    const results = await this.deps.classifier.classify(post, candidates);
-    log.append({
-      kind: 'post.classified',
-      account: account.handle,
-      postId: post.id,
-      classifier: this.deps.classifier.name,
-      results,
-    });
+    let results = this.classifications.get(postKey);
+    if (!results) {
+      try {
+        results = await this.deps.classifier.classify(post, candidates);
+      } catch (error) {
+        log.append({ kind: 'error', where: `classifying @${account.handle}, will retry`, message: errorMessage(error) });
+        return;
+      }
+      this.classifications.set(postKey, results);
+      log.append({
+        kind: 'post.classified',
+        account: account.handle,
+        postId: post.id,
+        classifier: this.deps.classifier.name,
+        results,
+      });
+    }
     const relevant = new Map<string, Classification>();
     for (const result of results) {
       if (result.relevant && result.confidence >= (this.deps.minConfidence ?? 0.7)) relevant.set(result.asset, result);
     }
-    if (relevant.size === 0) return;
 
     const prices = new Map<string, Promise<SignedResponse>>();
-    for (const rule of rules) await this.openForRule(rule, account, post, relevant, prices);
+    let retry = false;
+    for (const rule of rules) {
+      if (await this.openForRule(rule, account, post, relevant, prices)) retry = true;
+    }
+    if (!retry) this.donePosts.add(postKey);
   }
 
   // The assets a post may be checked against: those linked to the account in a rule, with the rule's topics.
@@ -119,29 +144,36 @@ export class TriggerEngine {
   }
 
   // Serves the relevant assets in the rule's priority order. The vault takes one trigger per user, asset and post, and
-  // its budget split stops an asset whose share of the day is spent.
+  // its budget split stops an asset whose share of the day is spent. Returns whether an asset should be tried again.
   private async openForRule(
     rule: Rule,
     account: WatchedAccount,
     post: Post,
     relevant: Map<string, Classification>,
     prices: Map<string, Promise<SignedResponse>>
-  ) {
+  ): Promise<boolean> {
     const { log, now, profiles } = this.deps;
+    let retry = false;
     for (const params of rule.assets) {
       if (!relevant.has(params.asset) || !rule.accounts[account.handle]?.includes(params.asset)) continue;
+      const settledKey = `${account.handle}:${post.id}:${rule.id}:${params.asset}`;
+      if (this.settled.has(settledKey)) continue;
       const asset = getAsset(profiles, params.asset);
+      const refuse = (reason: string) => {
+        this.settled.add(settledKey);
+        log.append({ kind: 'trigger.rejected', asset: asset.key, stage: 'open', reason });
+      };
       try {
         if (!prices.has(asset.key)) prices.set(asset.key, this.deps.fetchPrice(asset.key));
         const p0Response = await (prices.get(asset.key) as Promise<SignedResponse>);
         const p0 = readSignedPrice(profiles, asset, p0Response);
         if (!isPriceFresh(profiles, p0, now())) {
-          log.append({ kind: 'trigger.rejected', asset: asset.key, stage: 'open', reason: 'market closed: P0 is stale' });
+          refuse('market closed: P0 is stale');
           continue;
         }
         const timing = checkTweetToP0(post.createdAt, p0, profiles.maxTweetToP0Sec);
         if (!timing.ok) {
-          log.append({ kind: 'trigger.rejected', asset: asset.key, stage: 'open', reason: describeGateFailure[timing.reason] });
+          refuse(describeGateFailure[timing.reason]);
           continue;
         }
         const opened = await this.deps.vault.openTrigger({
@@ -151,6 +183,7 @@ export class TriggerEngine {
           post: post.response,
           p0: p0Response,
         });
+        this.settled.add(settledKey);
         this.pending.set(opened.triggerId, {
           triggerId: opened.triggerId,
           ruleId: rule.id,
@@ -176,10 +209,16 @@ export class TriggerEngine {
           ...(opened.txHash ? { txHash: opened.txHash } : {}),
         });
       } catch (error) {
-        const reason = error instanceof VaultRejection ? error.reason : errorMessage(error);
-        log.append({ kind: 'trigger.rejected', asset: asset.key, stage: 'open', reason });
+        if (error instanceof VaultRejection) {
+          refuse(error.reason);
+        } else {
+          // A failed fetch or RPC call says nothing about the post, so the next poll tries again
+          retry = true;
+          log.append({ kind: 'error', where: `opening ${asset.key}, will retry`, message: errorMessage(error) });
+        }
       }
     }
+    return retry;
   }
 
   // Brings P1 to each open trigger once its window opens, and expires the ones whose window closed.

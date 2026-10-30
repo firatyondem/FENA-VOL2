@@ -101,3 +101,17 @@ test('names the attestation error of a forged response', () => {
   assert.equal(revertReason(revert('SpikeTooHigh', [1n, 2n])), 'SpikeTooHigh');
   assert.equal(revertReason(new Error('socket hang up')), 'socket hang up');
 });
+
+test('an RPC failure is not a refusal: it passes through so the engine retries', async () => {
+  const { vault } = recordingVault(new Error('fetch failed'));
+  await assert.rejects(
+    vault.openTrigger({
+      ruleId: USER,
+      asset: 'OIL',
+      account: 'realDonaldTrump',
+      post: fixture('tweet-trump-venezuela.json'),
+      p0: fixture('oil-p0.json'),
+    }),
+    (error) => !(error instanceof VaultRejection) && /fetch failed/.test(String(error))
+  );
+});
