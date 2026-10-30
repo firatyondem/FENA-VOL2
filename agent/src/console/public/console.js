@@ -210,6 +210,12 @@ const connect = async () => {
   const stream = new EventSource(`/api/stream?since=${state.events.at(-1)?.seq ?? 0}`);
   stream.addEventListener('open', () => setLive('open', 'Live'));
   stream.addEventListener('error', () => setLive('closed', 'Reconnecting'));
+  // The agent restarted while this page stayed open: its events start over, so load them afresh
+  stream.addEventListener('hello', (message) => {
+    if (JSON.parse(message.data).runId === state.runId) return;
+    stream.close();
+    connect().catch(() => setLive('closed', 'Offline'));
+  });
   stream.addEventListener('agent-event', (message) => {
     const event = JSON.parse(message.data);
     if (!events.some((known) => known.seq === event.seq)) events.push(event);

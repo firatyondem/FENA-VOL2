@@ -36,10 +36,12 @@ export const startConsoleServer = ({
   clockIntervalMs = 1000,
 }: ConsoleServerOptions): Promise<Server> => {
   const streams = new Set<ServerResponse>();
+  // Event numbers restart with the agent, so a page that reconnects after a restart must start over
+  const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
   const sendState = (response: ServerResponse) => {
     response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SECURITY_HEADERS });
-    response.end(JSON.stringify({ now: now(), events: log.recent() }));
+    response.end(JSON.stringify({ runId, now: now(), events: log.recent() }));
   };
 
   const openStream = (request: IncomingMessage, response: ServerResponse) => {
@@ -49,6 +51,7 @@ export const startConsoleServer = ({
       Connection: 'keep-alive',
       ...SECURITY_HEADERS,
     });
+    response.write(`event: hello\ndata: ${JSON.stringify({ runId })}\n\n`);
     const since = Number(new URL(request.url ?? '/', 'http://localhost').searchParams.get('since') ?? 0);
     for (const event of log.since(Number.isFinite(since) ? since : 0)) {
       response.write(`event: agent-event\ndata: ${JSON.stringify(event)}\n\n`);

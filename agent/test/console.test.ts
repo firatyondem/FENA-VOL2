@@ -63,6 +63,23 @@ test('streams missed events, new events and the clock', async () => {
   });
 });
 
+test('each run has its own id, so an open page notices an agent restart', async () => {
+  const runIds: string[] = [];
+  for (let run = 0; run < 2; run++) {
+    await withServer(async (base) => {
+      const state = (await (await fetch(`${base}/api/state`)).json()) as { runId: string };
+      const controller = new AbortController();
+      const response = await fetch(`${base}/api/stream`, { signal: controller.signal });
+      const { value } = await (response.body as ReadableStream<Uint8Array>).getReader().read();
+      controller.abort();
+      // The stream greets with the same id the state carries
+      assert.equal(new TextDecoder().decode(value).split('\n\n')[0], `event: hello\ndata: {"runId":"${state.runId}"}`);
+      runIds.push(state.runId);
+    });
+  }
+  assert.notEqual(runIds[0], runIds[1]);
+});
+
 const at = (seq: number, event: Record<string, unknown>) => ({ seq, at: seq * 1000, ...event });
 
 test('the view follows a post through a trigger to a sale', () => {
