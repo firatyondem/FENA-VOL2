@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { keccak256, toHex } from 'viem';
 import { deriveRequestHash, type SignedResponse } from '../src/airnode/attestation.ts';
-import { latestTweetRequest, parseXDate, readSignedPost } from '../src/sources/twitter.ts';
+import { latestTweetRequest, parseXDate, readSignedPost, snowflakeAt, snowflakeTime } from '../src/sources/twitter.ts';
 
 const unsigned = (data: string): SignedResponse => ({
   airnode: '0x7B02Fd3324D2dC362f65a9c01e59EC5fDb4E1CCB',
@@ -51,4 +51,19 @@ test('marks a repost', () => {
     unsigned('{"author":"elonmusk","createdAt":"Fri Oct 30 17:20:00 +0000 2026","id":"1","text":"RT @dogeofficial: much wow"}')
   );
   assert.equal(post.isRepost, true);
+});
+
+test('reads the creation time from an X id', () => {
+  // The Snowflake epoch itself, and one millisecond-tick after 2^22 ids
+  assert.equal(snowflakeTime('0'), 1288834974);
+  assert.equal(snowflakeTime((1000n << 22n).toString()), 1288834975);
+  // An id from October 2024 lands in October 2024
+  const seconds = snowflakeTime('1846987139428634858');
+  assert.equal(new Date(seconds * 1000).toISOString().slice(0, 7), '2024-10');
+  assert.throws(() => snowflakeTime('12ab'), /not a numeric X id/);
+});
+
+test('builds ids whose time round-trips', () => {
+  const seconds = Date.UTC(2026, 9, 30, 17, 20, 0) / 1000;
+  assert.equal(snowflakeTime(snowflakeAt(seconds, 7n)), seconds);
 });

@@ -52,6 +52,18 @@ export const parseXDate = (text: string): number => {
   return sign === '+' ? utc - offset : utc + offset;
 };
 
+// X ids are Snowflakes: the top 42 bits are milliseconds since 2010-11-04T01:42:54.657Z. The vault can take a post's
+// creation time from its signed id with integer arithmetic, without parsing the date string on-chain.
+export const X_EPOCH_MS = 1288834974657n;
+
+export const snowflakeTime = (id: string): number => {
+  if (!/^\d+$/.test(id)) throw new Error(`"${id}" is not a numeric X id`);
+  return Number(((BigInt(id) >> 22n) + X_EPOCH_MS) / 1000n);
+};
+
+export const snowflakeAt = (seconds: number, sequence = 0n): string =>
+  (((BigInt(seconds) * 1000n - X_EPOCH_MS) << 22n) | sequence).toString();
+
 export const readSignedPost = (response: SignedResponse): Post => {
   const text = readString(response.data, 'text');
   return {
