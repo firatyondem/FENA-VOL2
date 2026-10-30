@@ -1,0 +1,7 @@
+{
+  "airnode": "0x11F6e1661f92775Cd63763941E3c7C57750dE449",
+  "requestHash": "0x7c31cfc759e24702963fc8586438167a1e106c0a9c6f09d59ca64fe1f2d35058",
+  "timestamp": "1793380860",
+  "data": "{\"author\":\"elonmusk\",\"createdAt\":\"Fri Oct 30 17:20:00 +0000 2026\",\"id\":\"2116218573419446274\",\"text\":\"Ðogecoin is the people’s crypto\"}",
+  "signature": "0xc311dc8338a212f6623cd5e9e3b6e4d09aeff4435ddf2a4b718436b5ebd7d2bd47032dc41f60b3c432c6acdeaf66cd04eb64e0a0f2ac0ed1ff91eb5b3f437d121c"
+}
