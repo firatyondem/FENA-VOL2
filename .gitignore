@@ -1,0 +1,21 @@
+﻿# Secrets
+.env
+.env.*
+*.key
+
+# Dependencies
+node_modules/
+venv/
+.venv/
+__pycache__/
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
