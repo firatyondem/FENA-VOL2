@@ -22,6 +22,7 @@ contract MockDEX {
     event TraderSet(address indexed trader, bool allowed);
     event AssetListed(address indexed asset, string symbol);
     event Bought(address indexed trader, address indexed asset, uint256 usdcIn, uint256 assetOut, uint256 price);
+    event Sold(address indexed trader, address indexed asset, uint256 assetIn, uint256 usdcOut, uint256 price);
 
     error NotOwner(address caller);
     error NotTrader(address caller);
@@ -32,6 +33,7 @@ contract MockDEX {
     error ZeroAmount();
     error ZeroPrice();
     error ZeroOutput();
+    error TransferFailed();
 
     constructor(MockUSDC usdc_, address owner_) {
         if (address(usdc_) == address(0) || owner_ == address(0)) revert ZeroAddress();
@@ -85,8 +87,30 @@ contract MockDEX {
         if (usdcIn == 0) revert ZeroAmount();
         assetOut = quoteBuy(asset, usdcIn, price);
         if (assetOut == 0) revert ZeroOutput();
-        usdc.transferFrom(msg.sender, address(this), usdcIn);
+        if (!usdc.transferFrom(msg.sender, address(this), usdcIn)) revert TransferFailed();
         MockAssetToken(asset).mint(msg.sender, assetOut);
         emit Bought(msg.sender, asset, usdcIn, assetOut, price);
+    }
+
+    /// @notice Mock USDC that `assetIn` asset tokens sell for at `price`, rounded down
+    function quoteSell(address asset, uint256 assetIn, uint256 price) public view returns (uint256) {
+        if (!isListed[asset]) revert AssetNotListed(asset);
+        if (price == 0) revert ZeroPrice();
+        uint256 assetUnit = 10 ** MockAssetToken(asset).decimals();
+        return (assetIn * price * 10 ** usdc.decimals()) / (assetUnit * 10 ** PRICE_DECIMALS);
+    }
+
+    /// @notice Sells `assetIn` of the caller's `asset` at exactly `price` for mock USDC
+    /// @dev Burns from the caller, so no approval is needed. When the price rose since the buy, the DEX holds less USDC
+    /// than it owes and mints the difference, which a mock token allows.
+    function sell(address asset, uint256 assetIn, uint256 price) external onlyTrader returns (uint256 usdcOut) {
+        if (assetIn == 0) revert ZeroAmount();
+        usdcOut = quoteSell(asset, assetIn, price);
+        if (usdcOut == 0) revert ZeroOutput();
+        MockAssetToken(asset).burn(msg.sender, assetIn);
+        uint256 reserve = usdc.balanceOf(address(this));
+        if (reserve < usdcOut) usdc.mint(address(this), usdcOut - reserve);
+        if (!usdc.transfer(msg.sender, usdcOut)) revert TransferFailed();
+        emit Sold(msg.sender, asset, assetIn, usdcOut, price);
     }
 }
