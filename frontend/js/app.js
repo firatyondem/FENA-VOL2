@@ -1557,11 +1557,6 @@ async function startLive() {
   renderStats();
   followAgentConsole();
   setInterval(() => { if (!document.hidden) refreshVaultActivity(); }, NETWORKS[Chain.chainId].pollMs);
-  // A wallet that already allowed this page reconnects without a prompt
-  if (window.ethereum) {
-    const accounts = await window.ethereum.request({ method: "eth_accounts" }).catch(() => []);
-    if (accounts.length) await Chain.connect(onWalletAccount).catch(err => { $("connectError").textContent = failText(err); });
-  }
 }
 
 // =========================================================
@@ -1572,7 +1567,7 @@ renderPipeline();
 renderStats();
 renderNextStep();
 if (isLive) {
-  openLogin(); // Connect wallet; it closes by itself when the wallet already allowed this page
+  openLogin(); // Nothing connects until the visitor clicks Connect wallet
   startLive();
 } else {
   renderModeChip();
