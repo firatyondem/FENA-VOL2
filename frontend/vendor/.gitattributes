@@ -1,0 +1,2 @@
+# Vendored as-is: keep the exact bytes, and no diffs of minified code
+*.min.js -text -diff

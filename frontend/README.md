@@ -4,14 +4,17 @@ The user interface for the vault: log in, set a rule, deposit and withdraw, watc
 
 ## Run it
 
-No build step. Open `index.html` in a browser, or serve the folder:
+No build step. Serve the **repo root**, because live mode reads `../shared/deployments/`:
 
 ```bash
-cd frontend
-python3 -m http.server 8000
+python -m http.server 8000
 ```
 
-Then open http://localhost:8000.
+Then open http://localhost:8000/frontend/. (`npx --yes serve -l 8000 .` works too, but needs a download; Python's
+server needs nothing.)
+
+The only library is ethers v6, vendored in `vendor/ethers.umd.min.js` (version and source in its first line), so the
+page needs no CDN.
 
 ## Practice mode
 
