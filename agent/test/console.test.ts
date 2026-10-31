@@ -34,6 +34,37 @@ test('serves the page, its assets and the state', async () => {
   });
 });
 
+test('lets only the allowed origins read the state and the stream', async () => {
+  await withServer(async (base) => {
+    const read = async (path: string, origin: string) => {
+      const controller = new AbortController();
+      const response = await fetch(`${base}${path}`, { headers: { Origin: origin }, signal: controller.signal });
+      controller.abort();
+      return response.headers.get('access-control-allow-origin');
+    };
+    assert.equal(await read('/api/state', 'http://localhost:8000'), 'http://localhost:8000');
+    assert.equal(await read('/api/stream', 'http://localhost:8000'), 'http://localhost:8000');
+    assert.equal(await read('/api/state', 'https://evil.example'), null);
+    assert.equal(await read('/api/stream', 'https://evil.example'), null);
+    assert.equal(await read('/', 'http://localhost:8000'), null, 'the console page itself stays same-origin');
+  });
+});
+
+test('reads its allowed origins from the options', async () => {
+  const log = new EventLog({ now: () => 1_000 });
+  const server = await startConsoleServer({ log, now: () => 0, port: 0, allowedOrigins: ['https://vault.example'] });
+  const { port } = server.address() as AddressInfo;
+  try {
+    const allowed = await fetch(`http://127.0.0.1:${port}/api/state`, { headers: { Origin: 'https://vault.example' } });
+    assert.equal(allowed.headers.get('access-control-allow-origin'), 'https://vault.example');
+    const before = await fetch(`http://127.0.0.1:${port}/api/state`, { headers: { Origin: 'http://localhost:8000' } });
+    assert.equal(before.headers.get('access-control-allow-origin'), null, 'the default is replaced, not extended');
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('refuses writes and unknown paths', async () => {
   await withServer(async (base) => {
     assert.equal((await fetch(`${base}/api/state`, { method: 'POST' })).status, 405);

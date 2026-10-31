@@ -1,5 +1,5 @@
 // Serves the console and streams the explanation log. It listens on localhost only and has no write routes: the console
-// watches the agent, it never steers it.
+// watches the agent, it never steers it. Pages on the allowed origins (the frontend) may read the log too.
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { EventLog } from '../log.ts';
@@ -11,7 +11,11 @@ export interface ConsoleServerOptions {
   port?: number;
   host?: string;
   clockIntervalMs?: number;
+  // Origins whose pages may read /api/state and /api/stream
+  allowedOrigins?: readonly string[];
 }
+
+export const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:8000'];
 
 const PUBLIC = new URL('./public/', import.meta.url);
 const STATIC: Record<string, [file: string, type: string]> = {
@@ -34,13 +38,25 @@ export const startConsoleServer = ({
   port = 4173,
   host = '127.0.0.1',
   clockIntervalMs = 1000,
+  allowedOrigins = DEFAULT_ALLOWED_ORIGINS,
 }: ConsoleServerOptions): Promise<Server> => {
   const streams = new Set<ServerResponse>();
   // Event numbers restart with the agent, so a page that reconnects after a restart must start over
   const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-  const sendState = (response: ServerResponse) => {
-    response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SECURITY_HEADERS });
+  // Read-only routes, so a plain GET from an allowed origin needs no preflight
+  const corsHeaders = (request: IncomingMessage): Record<string, string> => {
+    const origin = request.headers.origin;
+    return origin && allowedOrigins.includes(origin) ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : { Vary: 'Origin' };
+  };
+
+  const sendState = (request: IncomingMessage, response: ServerResponse) => {
+    response.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+      ...SECURITY_HEADERS,
+      ...corsHeaders(request),
+    });
     response.end(JSON.stringify({ runId, now: now(), events: log.recent() }));
   };
 
@@ -50,6 +66,7 @@ export const startConsoleServer = ({
       'Cache-Control': 'no-store',
       Connection: 'keep-alive',
       ...SECURITY_HEADERS,
+      ...corsHeaders(request),
     });
     response.write(`event: hello\ndata: ${JSON.stringify({ runId })}\n\n`);
     const since = Number(new URL(request.url ?? '/', 'http://localhost').searchParams.get('since') ?? 0);
@@ -74,7 +91,7 @@ export const startConsoleServer = ({
       response.writeHead(405, { Allow: 'GET', ...SECURITY_HEADERS }).end();
       return;
     }
-    if (path === '/api/state') return sendState(response);
+    if (path === '/api/state') return sendState(request, response);
     if (path === '/api/stream') return openStream(request, response);
     const asset = STATIC[path];
     if (!asset) {

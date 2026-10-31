@@ -13,6 +13,10 @@ const profiles = loadProfiles();
 let agentNow = () => Math.floor(Date.now() / 1000);
 const log = new EventLog({ file: new URL('../.data/events.jsonl', import.meta.url), now: () => agentNow() * 1000 });
 const port = Number(process.env.CONSOLE_PORT ?? 4173);
+// Pages that may read the explanation log, comma-separated: the frontend shows the AI's reason beside each post
+const allowedOrigins = process.env.CONSOLE_ALLOWED_ORIGINS?.split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 // Claude reads meaning when a key is set; otherwise the keyword baseline runs, so the replay works offline.
 const classifier: Classifier = process.env.ANTHROPIC_API_KEY
@@ -31,11 +35,11 @@ if (mode === 'replay') {
     speed: Number(process.env.REPLAY_SPEED ?? 10),
     onClock: (now) => (agentNow = now),
   });
-  await startConsoleServer({ log, now: replay.now, port });
+  await startConsoleServer({ log, now: replay.now, port, allowedOrigins });
 } else if (mode === 'live') {
   const { startLive } = await import('./live.ts');
   const live = await startLive({ profiles, log, classifier });
-  await startConsoleServer({ log, now: live.now, port });
+  await startConsoleServer({ log, now: live.now, port, allowedOrigins });
 } else {
   throw new Error(`AGENT_MODE must be replay or live, not ${mode}`);
 }
