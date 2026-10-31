@@ -19,6 +19,8 @@ export interface ConsoleServerOptions {
   prices?: { assets: readonly string[]; fetch: (asset: string) => Promise<SignedResponse> };
   // One signed price answers every request for its asset this long: at most one (paid) fetch per asset per window
   priceCacheMs?: number;
+  // /api/state sends at most this many of the newest events, so the console and the frontend stay fast
+  stateEvents?: number;
 }
 
 export const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:8000'];
@@ -47,6 +49,7 @@ export const startConsoleServer = ({
   allowedOrigins = DEFAULT_ALLOWED_ORIGINS,
   prices,
   priceCacheMs = 10_000,
+  stateEvents = 1000,
 }: ConsoleServerOptions): Promise<Server> => {
   const streams = new Set<ServerResponse>();
   // Event numbers restart with the agent, so a page that reconnects after a restart must start over
@@ -65,7 +68,7 @@ export const startConsoleServer = ({
       ...SECURITY_HEADERS,
       ...corsHeaders(request),
     });
-    response.end(JSON.stringify({ runId, now: now(), signedPrices: Boolean(prices), events: log.recent() }));
+    response.end(JSON.stringify({ runId, now: now(), signedPrices: Boolean(prices), events: log.recent(stateEvents) }));
   };
 
   // A failed fetch stays cached for its window too, so a paid source is never asked again sooner

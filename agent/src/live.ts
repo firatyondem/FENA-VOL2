@@ -7,6 +7,7 @@ import { baseSepolia, foundry } from 'viem/chains';
 import { createPayingFetch, fetchSignedResponse, withSettlementReporting } from './airnode/client.ts';
 import { ViemVault } from './chain/viem-vault.ts';
 import type { Classifier } from './classifier/types.ts';
+import { CycleRunner } from './engine/cycle.ts';
 import { SellKeeper } from './engine/keeper.ts';
 import { TriggerEngine } from './engine/trigger-engine.ts';
 import type { EventLog } from './log.ts';
@@ -69,6 +70,9 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
 
   const twitter = profiles.airnodes.twitterapi;
   if (!twitter) throw new Error('shared/asset-profiles.json has no twitterapi Airnode');
+  const cycleIntervalSec = Number(process.env.CYCLE_INTERVAL_SEC || 30);
+  const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC || 60);
+  const p1IntervalSec = Number(process.env.P1_INTERVAL_SEC || 30);
   const now = () => Math.floor(Date.now() / 1000);
   const fetchPrice = (asset: string) => {
     const profile = getAsset(profiles, asset);
@@ -83,6 +87,7 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
     tweetAirnode: twitter.address,
     fetchLatestPost: (watched) => fetchSignedResponse(twitter.url, latestTweetRequest(watched), airnodeFetch),
     fetchPrice,
+    p1IntervalSec,
   });
   const keeper = new SellKeeper({ profiles, vault, log, now, fetchPrice });
 
@@ -94,31 +99,17 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
     accounts: watchlist.map((watched) => watched.handle),
   });
 
-  const pollEverySec = Number(process.env.POLL_INTERVAL_SEC ?? 60);
-  let polling = false;
-  const poll = async () => {
-    if (polling) return;
-    polling = true;
-    try {
-      for (const watched of watchlist) await engine.pollAccount(watched);
-    } finally {
-      polling = false;
-    }
-  };
-  let ticking = false;
-  const tick = async () => {
-    if (ticking) return;
-    ticking = true;
-    try {
-      await engine.checkPending();
-      await keeper.tick();
-    } catch (error) {
-      log.append({ kind: 'error', where: 'tick', message: (error as Error).message });
-    } finally {
-      ticking = false;
-    }
-  };
-  await poll();
-  const timers = [setInterval(poll, pollEverySec * 1000), setInterval(tick, 5000)];
-  return { now, fetchPrice, stop: () => timers.forEach(clearInterval) };
+  // One cycle every CYCLE_INTERVAL_SEC: health, rules, Gate 2, keeper, then Gate 1 when a poll is due
+  const cycles = new CycleRunner({
+    log,
+    engine,
+    keeper,
+    vault,
+    watchlist,
+    agent: account.address,
+    cycleIntervalSec,
+    pollIntervalSec,
+  });
+  cycles.start();
+  return { now, fetchPrice, cycles, stop: () => cycles.stop() };
 };

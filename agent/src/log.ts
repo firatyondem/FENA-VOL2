@@ -41,6 +41,32 @@ export type AgentEvent =
   | { kind: 'position.sold'; positionId: string; asset: string; sellKind: string; price: string; usdcOut: string }
   | { kind: 'payment.settled'; transaction: string }
   | { kind: 'tamper.result'; name: string; expected: string; actual: string; passed: boolean }
+  | {
+      kind: 'cycle.finished';
+      cycle: number;
+      // Milliseconds since the epoch
+      startedAt: number;
+      durationMs: number;
+      mode: 'normal' | 'saving' | 'halted';
+      polled: boolean;
+      accountsPolled: string[];
+      postsNew: number;
+      classified: number;
+      triggersOpened: number;
+      p1Checks: number;
+      bought: number;
+      rejected: number;
+      expired: number;
+      sold: number;
+      paidCalls: number;
+      txSent: number;
+      // From the balances at the start and the end of the cycle; a payment can settle a block late
+      ausdSpent: string;
+      ethSpent: string;
+      errors: number;
+      nextAt: number;
+    }
+  | { kind: 'cycle.skipped'; cycle: number; reason: string; runningForMs: number }
   | { kind: 'error'; where: string; message: string };
 
 export type LoggedEvent = AgentEvent & { seq: number; at: number };
@@ -60,7 +86,8 @@ export class EventLog {
   private readonly now: () => number;
   private seq = 0;
 
-  constructor({ file, capacity = 500, now = Date.now }: EventLogOptions = {}) {
+  // 5,000 events hold a multi-hour live run: two cycle summaries a minute plus everything the cycles did
+  constructor({ file, capacity = 5000, now = Date.now }: EventLogOptions = {}) {
     this.capacity = capacity;
     this.now = now;
     if (file) {
