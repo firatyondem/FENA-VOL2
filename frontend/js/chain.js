@@ -250,7 +250,7 @@ const Chain = {
       });
     }
 
-    const opened = new Map(), confirmed = new Map(), sold = new Map(), lastPrices = {};
+    const opened = new Map(), confirmed = new Map(), expired = new Map(), sold = new Map(), lastPrices = {};
     const notePrice = (key, price, time) => {
       if (!key) return;
       if (!lastPrices[key] || time >= lastPrices[key].time) lastPrices[key] = { price: Units.priceFromWei(price), time };
@@ -262,6 +262,8 @@ const Chain = {
         notePrice(keyOf(a.assetId), a.p0, Number(a.t0));
       } else if (log.name === "TriggerConfirmed") {
         confirmed.set(String(a.triggerId), { ...a, txHash: log.txHash });
+      } else if (log.name === "TriggerExpired") {
+        expired.set(String(a.triggerId), { txHash: log.txHash, blockNumber: log.blockNumber });
       } else if (log.name === "PositionSold") {
         sold.set(String(a.positionId), { ...a, txHash: log.txHash, blockNumber: log.blockNumber });
       }
@@ -284,11 +286,11 @@ const Chain = {
     });
 
     const triggers = [];
-    triggerRaws.forEach((raw, i) => {
+    for (const [i, raw] of triggerRaws.entries()) {
       const t = plain(raw), id = String(i + 1);
-      if (!mine(t.user)) return;
+      if (!mine(t.user)) continue;
       const key = keyOf(t.assetId), rule = assetRules[key] || {};
-      const o = opened.get(id), c = confirmed.get(id);
+      const o = opened.get(id), c = confirmed.get(id), e = expired.get(id);
       triggers.push({
         id, asset: key, account: this.handleOfAccount[String(t.account).toLowerCase()] || null,
         tweetId: String(t.tweetId), postTime: Units.tweetTimeMs(t.tweetId),
@@ -299,9 +301,10 @@ const Chain = {
         positionId: c ? String(c.positionId) : null,
         quoteIn: c ? Units.unitsToUsdc(c.quoteIn) : null,
         assetOut: c ? Units.tokenFromUnits(c.assetOut, this.tokenDecimals[key] ?? 18) : null,
-        openTx: o?.txHash, confirmTx: c?.txHash,
+        openTx: o?.txHash, confirmTx: c?.txHash, expireTx: e?.txHash,
+        expiredAt: e ? await this.blockTime(e.blockNumber) : null,
       });
-    });
+    }
 
     const triggerOfPosition = new Map(triggers.filter(t => t.positionId).map(t => [t.positionId, t]));
     const positions = [];

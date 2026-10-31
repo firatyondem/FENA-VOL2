@@ -262,3 +262,8 @@ footer ol { margin: 6px 0 0; padding-left: 18px; }
 .toast.failed { border-left-color: var(--bad); }
 .toast .mono { font-size: .78rem; color: var(--muted); word-break: break-all; }
 .toast a { color: inherit; }
+
+/* Live mode: links to posts, transactions and the agent's console */
+a { color: var(--accent); text-underline-offset: 2px; }
+a.btn { color: var(--text); text-decoration: none; }
+.proof a { word-break: break-all; }

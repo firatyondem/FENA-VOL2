@@ -152,9 +152,9 @@
       <div class="card">
         <div class="cond-head">
           <h2>Live feed</h2>
-          <label class="toggle small" style="margin:0"><input type="checkbox" id="forceOpen" checked> pretend markets are open (practice only)</label>
+          <label class="toggle small practice-only" style="margin:0"><input type="checkbox" id="forceOpen" checked> pretend markets are open (practice only)</label>
         </div>
-        <p class="muted" style="margin-top:0">In the real app, an <b style="color:var(--text)">AI agent</b> reads every new post from the people you watch, decides whether it's about one of your assets, and brings signed prices to the contract. <b style="color:var(--text)">In practice mode</b> you play example posts yourself (they're scripted, not real quotes) to see what happens step by step.</p>
+        <p class="muted" style="margin-top:0">In the real app, an <b style="color:var(--text)">AI agent</b> reads every new post from the people you watch, decides whether it's about one of your assets, and brings signed prices to the contract. <span class="practice-only"><b style="color:var(--text)">In practice mode</b> you play example posts yourself (they're scripted, not real quotes) to see what happens step by step.</span><span class="live-only hidden">Everything below is read from the vault's events: each price check, purchase and sale is a transaction you can look up.</span></p>
         <div class="pipeline" id="pipeline"></div>
         <div class="next-step" id="nextStep" role="status"></div>
       </div>
@@ -172,7 +172,7 @@
         </div>
         <div class="card">
           <h2>Latest results</h2>
-          <p class="muted small" style="margin-top:-8px">Invested or blocked, and why.</p>
+          <p class="muted small" style="margin-top:-8px"><span class="practice-only">Invested or blocked, and why.</span><span class="live-only hidden">Invested, sold or expired.</span></p>
           <div class="feed" id="feedResults"><p class="muted small">Nothing yet.</p></div>
           <p><button class="link small" data-goto="history">See everything in History →</button></p>
         </div>
@@ -193,8 +193,8 @@
         <div id="investments"><p class="muted">Nothing invested yet.</p></div>
       </div>
       <div class="card" style="margin-top:16px">
-        <h2>Blocked by the contract</h2>
-        <p class="muted small" style="margin-top:-8px">Every attempt the safety checks stopped. No money moved.</p>
+        <h2><span class="practice-only">Blocked by the contract</span><span class="live-only hidden">Expired price checks</span></h2>
+        <p class="muted small" style="margin-top:-8px"><span class="practice-only">Every attempt the safety checks stopped. No money moved.</span><span class="live-only hidden">Posts whose price never confirmed in time. No money moved.</span></p>
         <div class="feed" id="blockedList"><p class="muted small">Nothing blocked yet.</p></div>
       </div>
     </section>

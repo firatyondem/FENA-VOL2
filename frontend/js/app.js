@@ -80,7 +80,12 @@ const reasonText = e => e.reason ? (REASONS[e.reason] || e.reason) : e.message;
 // Mode: practice reads Mock, live reads the last chain snapshot (see js/chain.js)
 // =========================================================
 const isLive = MODE === "live";
-const live = { ready: false, state: null, loadedRuleFor: null, ruleSavedAt: null };
+const live = { ready: false, state: null, loadedRuleFor: null, ruleSavedAt: null, blockSeenAt: 0, expiring: new Set() };
+// The chain's clock, moving on from the newest block's time since the page first saw that block (anvil's clock can run
+// ahead of the wall clock, and an idle anvil mines no blocks)
+const chainNowLive = () => live.state ? live.state.chainNow + Math.floor((Date.now() - live.blockSeenAt) / 1000) : Math.floor(Date.now() / 1000);
+const lastVerified = a => live.state?.lastPrices[a];
+const verifiedAgo = a => ago(chainNowLive() - (lastVerified(a)?.time ?? chainNowLive()));
 const vaultBalance = () => isLive ? (live.state?.vaultBalance ?? 0) : Mock.vault;
 const hasRule = () => isLive ? !!live.state?.rule : !!Mock.rule;
 const rulePaused = () => isLive ? !!live.state?.paused : Mock.paused;
@@ -248,7 +253,7 @@ function renderTicker() {
       document.querySelectorAll(`[data-price="${a}"]`).forEach(el => { el.textContent = last ? fmtPrice(last.price) : "–"; });
       document.querySelectorAll(`[data-change="${a}"]`).forEach(el => {
         el.className = "flat";
-        el.textContent = last ? `verified ${ago(s.chainNow - last.time)}` : "no verified price yet";
+        el.textContent = last ? `verified ${verifiedAgo(a)}` : "no verified price yet";
       });
     }
     return;
@@ -314,6 +319,7 @@ const px = a => isLive ? (live.state?.lastPrices[a]?.price ?? 100) : Mock.prices
 const priceLine = a => !isLive ? `${token(a)} is at ${fmtPrice(px(a))}`
   : live.state?.lastPrices[a] ? `${token(a)} was last verified at ${fmtPrice(px(a))}` : `At an example price of ${fmtPrice(px(a))}`;
 const vaultFor = () => vaultBalance();
+const sellEndpointReady = () => false;
 const ASSET_SLIDERS = [
   { key: "trend", name: "Minimum price rise", term: "trend threshold", show: v => `+${v}%`,
     range: a => [prof(a).trend, prof(a).trend * 4, 0.5],
@@ -759,6 +765,17 @@ function renderResults() {
 }
 
 $("feedTriggers").onclick = e => {
+  if (isLive) { // anyone may expire a price check whose window has closed
+    const id = e.target.closest("[data-expire]")?.dataset.expire;
+    if (!id || live.expiring.has(id)) return;
+    live.expiring.add(id);
+    activityHint = null;
+    renderLiveActivity();
+    Chain.send("Expire price check", "vault", "expireTrigger", [BigInt(id)])
+      .then(refreshLive, err => { activityHint = { text: `Couldn't expire price check ${id}: ${failText(err)}` }; })
+      .finally(() => { live.expiring.delete(id); renderLiveActivity(); });
+    return;
+  }
   const id = +e.target.dataset.trig;
   if (!id) return;
   try {
@@ -811,7 +828,125 @@ const newPostId = () => "18" + Date.now() + Math.floor(Math.random() * 1000);
 const playExample = () => handlePost({ ...DEMO_POSTS[Mock.nextPost++ % DEMO_POSTS.length], id: newPostId() });
 
 // One box that always says what happened and what to do next
+const until = seconds => seconds <= 0 ? "now" : seconds < 120 ? `in ${seconds}s` : `in ${fmtMin(Math.round(seconds / 60))}`;
+
+function postCardLive(post) {
+  const said = agentPosts.get(post.tweetId);
+  return `<div class="item"><div class="meta">${clock(post.postTime)} · @${esc(post.account || "?")} · <a href="${postUrl(post.tweetId)}" target="_blank" rel="noopener">view post ↗</a></div>
+    ${said?.text ? `<div>“${esc(said.text)}”</div>` : ""}
+    <div class="row">${post.checks.map(t => `<span class="badge ok">relevant → ${token(t.asset)} · P0 ${fmtPrice(t.p0)}</span>`).join(" ")}</div>
+    ${post.checks.map(t => said?.verdicts?.find(v => v.asset === t.asset)).filter(Boolean).map(v => `<div class="reason">AI: ${esc(v.reason)} · confidence ${v.confidence}</div>`).join("")}</div>`;
+}
+
+function triggerCardLive(t) {
+  const now = chainNowLive(), range = `needs +${Units.bpsToPct(t.thresholdBps)}% to +${Units.bpsToPct(t.spikeCapBps)}%`;
+  let state, badge, button = "";
+  if (t.status === "confirmed") {
+    state = `${fmtPrice(t.p0)} → ${fmtPrice(t.p1)} <span class="${t.p1 >= t.p0 ? "up" : "down"}">(${fmtSigned((t.p1 / t.p0 - 1) * 100)}%)</span>`;
+    badge = '<span class="badge ok">invested</span>';
+  } else if (t.status === "expired") {
+    state = `${fmtPrice(t.p0)} · no confirming price in time`;
+    badge = '<span class="badge info">expired</span>';
+  } else if (now > t.closesAt) {
+    state = `${fmtPrice(t.p0)} · the window closed at ${clock(t.closesAt * 1000)}`;
+    badge = '<span class="badge info">window closed</span>';
+    button = live.expiring.has(t.id) ? '<div class="row"><button class="btn small" disabled>Confirm in your wallet…</button></div>'
+      : `<div class="row"><button class="btn small" data-expire="${esc(t.id)}">Close it (expire)</button></div>`;
+  } else {
+    state = `${fmtPrice(t.p0)} · ${now < t.opensAt ? `price checked from ${clock(t.opensAt * 1000)} (${until(t.opensAt - now)})` : "window open"}, until ${clock(t.closesAt * 1000)} (${until(t.closesAt - now)})`;
+    badge = '<span class="badge warn">waiting for the price</span>';
+  }
+  return `<div class="item"><div class="meta">check ${esc(t.id)} · @${esc(t.account || "?")} · ${token(t.asset)}</div>
+    <div class="mono">${state}</div><div class="reason">${range}</div><div class="row">${badge}</div>${button}</div>`;
+}
+
+function renderLiveActivity() {
+  const s = live.state;
+  if (!s) return;
+  const triggers = s.triggers.slice().sort((a, b) => b.t0 - a.t0 || Number(b.id) - Number(a.id));
+  const posts = new Map(); // one card per post, with every asset it opened a price check for
+  for (const t of triggers) {
+    const key = `${t.account}:${t.tweetId}`;
+    if (!posts.has(key)) posts.set(key, { ...t, checks: [] });
+    posts.get(key).checks.push(t);
+  }
+  $("feedPosts").innerHTML = posts.size ? [...posts.values()].map(postCardLive).join("")
+    : '<p class="muted small">No post has opened a price check yet. The agent reads every new post from the accounts you watch.</p>';
+  $("feedTriggers").innerHTML = triggers.length ? triggers.map(triggerCardLive).join("") : '<p class="muted small">Nothing yet.</p>';
+
+  const items = [];
+  for (const t of triggers) {
+    if (t.status === "confirmed") items.push({ time: t.t1, ok: true, text: `Invested ${fmt(t.quoteIn)} mUSDC in ${fmt(t.assetOut, 4)} ${token(t.asset)} at the verified price ${fmtPrice(t.p1)}.` });
+    if (t.status === "expired") items.push({ time: t.expiredAt ?? t.closesAt, ok: false, text: `The ${token(t.asset)} price check expired; nothing was invested.` });
+  }
+  for (const p of s.positions) if (!p.isOpen && p.soldAt) {
+    items.push({ time: p.soldAt, ok: true, text: `Sold ${fmt(p.amount, 4)} ${token(p.asset)} at ${fmtPrice(p.exit)} for ${fmt(p.proceeds)} mUSDC (${SELL_WORDS[p.sellReason]}).` });
+  }
+  items.sort((a, b) => b.time - a.time);
+  $("feedResults").innerHTML = items.length ? items.slice(0, 5).map(r => `<div class="item"><div class="meta">${clock(r.time * 1000)}</div>
+    <span class="badge ${r.ok ? "ok" : "info"}">${r.ok ? "done" : "expired"}</span> ${esc(r.text)}</div>`).join("") : '<p class="muted small">Nothing yet.</p>';
+
+  const newest = triggers[0];
+  pipelineState = !newest ? { step: 0, outcome: null }
+    : newest.status === "confirmed" ? { step: 5, outcome: "okay" }
+    : newest.status === "expired" ? { step: 5, outcome: "fail" } : { step: 4, outcome: null };
+  renderPipeline();
+  renderNextStep();
+}
+
+function renderNextStepLive() {
+  const s = live.state, network = NETWORKS[Chain.chainId];
+  const wireDesk = network?.agentConsole ? `<a class="btn" href="${esc(network.agentConsole)}" target="_blank" rel="noopener">Open the agent's Wire Desk</a>` : "";
+  const open = (s?.triggers ?? []).filter(t => t.status === "open").sort((a, b) => b.t0 - a.t0)[0];
+  let text, buttons = wireDesk;
+  if (!Chain.account) {
+    text = "<b>Connect your wallet</b> to see your vault, your rule and what the agent did for you.";
+    buttons = `<button class="btn primary" data-next="connect">Connect wallet</button>`;
+  } else if (!s?.rule) {
+    text = "<b>First, save your rule</b> in the Your rule tab. Without a rule the vault invests in nothing.";
+    buttons = `<button class="btn primary" data-next="rule">Go to Your rule</button>`;
+  } else if (!s.vaultBalance && !s.positions.some(p => p.isOpen)) {
+    text = "<b>Next, deposit money</b> in the Money tab. The vault can only invest what you put in.";
+    buttons = `<button class="btn primary" data-next="money">Go to Money</button>`;
+  } else if (s.paused) {
+    text = "<b>Your rule is paused.</b> The agent's posts can't open price checks and nothing new is invested until you resume it.";
+    buttons = `<button class="btn primary" data-next="rule">Go to Your rule</button>`;
+  } else if (activityHint?.text) {
+    text = esc(activityHint.text);
+  } else if (open) {
+    const now = chainNowLive();
+    text = `<b>Check 1 passed</b> for ${token(open.asset)} after @${esc(open.account || "?")}'s post. <b>Next:</b> the agent brings a signed price, and the vault invests only if it rose +${Units.bpsToPct(open.thresholdBps)}% to +${Units.bpsToPct(open.spikeCapBps)}% ` +
+      (now < open.opensAt ? `from ${clock(open.opensAt * 1000)} (${until(open.opensAt - now)})` : "now") + `, until ${clock(open.closesAt * 1000)}.`;
+  } else {
+    const watched = s.rule.watched.map(h => "@" + h).join(", ");
+    text = `<b>Waiting for posts</b> from ${esc(watched)}. The agent reads each new one; when it's about one of your assets, a price check opens here.`;
+  }
+  $("nextStep").innerHTML = `<div class="step-text">${text}</div><div class="buttons">${buttons}</div>`;
+}
+
+// The agent's explanation log: its reading of each post, shown beside the post. Optional, and quiet when the agent's
+// console can't be reached.
+const agentPosts = new Map(); // tweet id -> { text, verdicts }
+function followAgentConsole() {
+  const base = NETWORKS[Chain.chainId]?.agentConsole;
+  if (!base || typeof EventSource === "undefined") return;
+  const take = event => {
+    if (event.kind === "post.seen") agentPosts.set(event.postId, { ...agentPosts.get(event.postId), text: event.text });
+    if (event.kind === "post.classified") agentPosts.set(event.postId, { ...agentPosts.get(event.postId), verdicts: event.results });
+  };
+  fetch(`${base}/api/state`).then(r => r.json()).then(state => {
+    state.events.forEach(take);
+    renderLiveFeeds();
+    let opened = false;
+    const stream = new EventSource(`${base}/api/stream?since=${state.events.at(-1)?.seq ?? 0}`);
+    stream.addEventListener("open", () => { opened = true; });
+    stream.addEventListener("agent-event", message => { take(JSON.parse(message.data)); renderLiveFeeds(); });
+    stream.addEventListener("error", () => { if (!opened) stream.close(); });
+  }).catch(() => { /* no agent console: the posts show without the AI's reasons */ });
+}
+
 function renderNextStep() {
+  if (isLive) return renderNextStepLive();
   const pending = Mock.triggers.filter(t => t.status === "pending").at(-1);
   const play = (primary = true) => `<button class="btn ${primary ? "primary" : ""}" data-next="play">Play an example post</button>`;
   let text, buttons;
@@ -845,7 +980,8 @@ function renderNextStep() {
 $("nextStep").onclick = e => {
   const b = e.target.closest("[data-next]");
   if (!b) return;
-  if (b.dataset.next === "play") playExample();
+  if (b.dataset.next === "connect") openLogin();
+  else if (b.dataset.next === "play") playExample();
   else if (b.dataset.next === "check") $("feedTriggers").onclick({ target: b });
   else showTab(b.dataset.next);
 };
@@ -855,8 +991,21 @@ Mock.forceMarketOpen = $("forceOpen").checked; // on by default in practice mode
 // =========================================================
 // History
 // =========================================================
-const currentPrice = p => p.open ? Mock.prices[p.asset] : p.exit;
-const gainOf = p => (p.open ? p.qty * Mock.prices[p.asset] : p.proceeds) - p.cost;
+// Live: the chain's positions in the shape this tab draws. An open position is valued at the last price the vault
+// verified for its asset, labelled with its time; the page never makes a price up.
+const SELL_WORDS = { Manual: "sold by hand", TakeProfit: "take profit", Stagnation: "stagnation exit" };
+const livePositionView = p => ({
+  id: Number(p.id), asset: p.asset, qty: p.amount, entry: p.entryPrice, cost: p.cost, open: p.isOpen,
+  openedAt: p.openedAt * 1000, exit: p.exit, proceeds: p.proceeds, soldAt: p.soldAt ? p.soldAt * 1000 : null,
+  sellReason: p.sellReason ? SELL_WORDS[p.sellReason] : null, live: p,
+  trigger: p.trigger ? { handle: p.trigger.account, tweetId: p.trigger.tweetId, t0: p.trigger.postTime, p0: p.trigger.p0,
+                         elapsedMin: (p.trigger.t1 - p.trigger.t0) / 60, range: { trend: Units.bpsToPct(p.trigger.thresholdBps),
+                         spike: Units.bpsToPct(p.trigger.spikeCapBps) } } : null,
+});
+const positionsNow = () => isLive ? (live.state?.positions ?? []).map(livePositionView) : Mock.positions;
+const currentPrice = p => p.open ? (isLive ? (lastVerified(p.asset)?.price ?? p.entry) : Mock.prices[p.asset]) : p.exit;
+const gainOf = p => (p.open ? p.qty * currentPrice(p) : p.proceeds) - p.cost;
+const postUrl = id => `https://x.com/i/status/${encodeURIComponent(id)}`;
 let openDetail = null;
 
 function ringSvg(gains, losses) {
@@ -868,7 +1017,7 @@ function ringSvg(gains, losses) {
 }
 
 function renderGlance() {
-  const all = Mock.positions, closed = all.filter(p => !p.open), enough = closed.length >= 3;
+  const all = positionsNow(), closed = all.filter(p => !p.open), enough = closed.length >= 3;
   const gains = closed.filter(p => gainOf(p) >= 0).length;
   const invested = all.reduce((t, p) => t + p.cost, 0), result = all.reduce((t, p) => t + gainOf(p), 0);
   const sorted = closed.slice().sort((a, b) => gainOf(b) - gainOf(a)), best = sorted[0], worst = sorted.at(-1);
@@ -894,10 +1043,50 @@ function renderGlance() {
     <div class="card"><div class="eyebrow">best and worst</div>
       <div style="margin:8px 0 16px">best ${link(best)} · worst ${link(best === worst ? null : worst)}</div>
       <div class="eyebrow">result by asset</div><div class="asset-bars" style="margin:10px 0 16px">${bars}</div>
-      <div class="eyebrow">blocked by the contract <b class="mono" style="color:var(--text);font-size:1rem;margin-left:6px">${results.filter(r => !r.ok).length}</b></div></div>`;
+      <div class="eyebrow">${isLive ? "price checks that expired" : "blocked by the contract"} <b class="mono" style="color:var(--text);font-size:1rem;margin-left:6px">${isLive ? (live.state?.triggers ?? []).filter(t => t.status === "expired").length : results.filter(r => !r.ok).length}</b></div></div>`;
+}
+
+function storyOfLive(p) {
+  const t = p.trigger, said = t && agentPosts.get(t.tweetId);
+  let s = "";
+  if (t) {
+    const who = t.handle ? `@${esc(t.handle)}` : "a watched account", move = (p.entry / t.p0 - 1) * 100;
+    s = `On ${dateTime(t.t0)}, ${who} posted${said?.text ? ` “${esc(said.text)}”` : ""} (<a href="${postUrl(t.tweetId)}" target="_blank" rel="noopener">view post</a>). ` +
+      `The AI linked it to ${assetName(p.asset)}, and the vault took the signed price ${fmtPrice(t.p0)}. ` +
+      `${fmtMin(Math.round(t.elapsedMin))} later the signed price was ${fmtPrice(p.entry)} (${fmtSigned(move)}%), inside your +${t.range.trend}% to +${t.range.spike}% range, so `;
+  }
+  s += `the vault invested ${fmt(p.cost)} mUSDC in ${fmt(p.qty, 4)} ${token(p.asset)}.`;
+  if (!p.open) s += ` It was sold (${esc(p.sellReason)}) at ${fmtPrice(p.exit)} for ${fmt(p.proceeds)} mUSDC: ${gainOf(p) >= 0 ? "a gain" : "a loss"} of ${fmt(Math.abs(gainOf(p)))} mUSDC.`;
+  else s += ` Its value uses the last price the vault verified, ${fmtPrice(currentPrice(p))} (${verifiedAgo(p.asset)}).`;
+  return s;
+}
+
+const txLink = (label, hash) => {
+  if (!hash) return "";
+  const url = Chain.explorerTx(hash);
+  return `<div>${label}: ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(hash)}</a>` : esc(hash)}</div>`;
+};
+function detailHtmlLive(p) {
+  const t = p.live.trigger, profile = Chain.profiles[p.asset] || {};
+  const sell = p.open ? `<div class="buttons" style="margin-top:14px"><button class="btn small primary" data-sell="${p.id}"
+      ${sellEndpointReady() ? "" : 'disabled title="Sold automatically by the keeper at take profit or after the stagnation delay"'}>Sell now at a fresh signed price</button></div>` : "";
+  return `<tr class="detail"><td colspan="9">
+    <p class="story">${storyOfLive(p)}</p>
+    <ul class="steps">
+      ${t ? `<li>${clock(t.postTime)} · post ${esc(t.tweetId)} from @${esc(t.account || "?")} opened price check ${esc(t.id)}</li>
+      <li>signed price ${fmtPrice(t.p0)}, taken ${clock(t.t0 * 1000)}</li>
+      <li>signed price ${fmtPrice(p.entry)} checked by the vault: signer, request, freshness, range and limits all passed</li>` : ""}
+      <li>${clock(p.openedAt)} · swapped ${fmt(p.cost)} mUSDC for ${fmt(p.qty, 4)} ${token(p.asset)}</li>
+      ${p.open ? "" : `<li>${clock(p.soldAt)} · ${esc(p.sellReason)} at ${fmtPrice(p.exit)}</li>`}
+    </ul>
+    <div class="proof">proof · price signer ${esc(profile.airnode || "?")}
+      ${txLink("price check opened", t?.openTx)}${txLink("bought", t?.confirmTx)}${txLink("sold", p.live.sellTx)}</div>
+    ${sell}
+  </td></tr>`;
 }
 
 function storyOf(p) {
+  if (isLive) return storyOfLive(p);
   const t = p.trigger, acc = accountOf(t.handle), rule = t.range, move = (p.entry / t.p0 - 1) * 100;
   let s = `On ${dateTime(t.t0)}, ${acc.name} posted “${esc(t.text)}”. Your rule links ${shortName(t.handle)} to ${assetName(p.asset)}. ` +
     `The signed price was ${fmtPrice(t.p0)}. ${fmtMin(Math.round(t.elapsedMin))} later it was ${fmtPrice(p.entry)} (${fmtSigned(move)}%), inside your +${rule.trend}% to +${rule.spike}% range, ` +
@@ -907,6 +1096,7 @@ function storyOf(p) {
 }
 
 function detailHtml(p) {
+  if (isLive) return detailHtmlLive(p);
   const t = p.trigger;
   return `<tr class="detail"><td colspan="9">
     <p class="story">${storyOf(p)}</p>
@@ -922,21 +1112,31 @@ function detailHtml(p) {
   </td></tr>`;
 }
 
+// Who started an investment: the post's account and its text (live: from the agent's log, else a link to the post)
+function startedBy(p) {
+  const t = p.trigger;
+  if (!t) return '<span class="muted">unknown post</span>';
+  if (!isLive) return `@${esc(t.handle)} · “${esc(t.text.slice(0, 40))}${t.text.length > 40 ? "…" : ""}”`;
+  const text = agentPosts.get(t.tweetId)?.text;
+  return `@${esc(t.handle || "?")} · ${text ? `“${esc(text.slice(0, 40))}${text.length > 40 ? "…" : ""}”` : `<a href="${postUrl(t.tweetId)}" target="_blank" rel="noopener">post ↗</a>`}`;
+}
+
 function renderInvestments() {
   const fa = $("fAsset").value, fo = $("fOutcome").value, fs = $("fStatus").value;
-  const used = [...new Set(Mock.positions.map(p => p.asset))];
+  const all = positionsNow();
+  const used = [...new Set(all.map(p => p.asset))];
   if ($("fAsset").options.length - 1 !== used.length)
     $("fAsset").innerHTML = '<option value="">every asset</option>' + used.map(a => `<option value="${a}" ${a === fa ? "selected" : ""}>${token(a)}</option>`).join("");
-  if (!Mock.positions.length) { $("investments").innerHTML = '<p class="muted">Nothing invested yet. Every investment the vault makes appears here.</p>'; return; }
-  const rows = Mock.positions.slice().reverse().filter(p =>
+  if (!all.length) { $("investments").innerHTML = '<p class="muted">Nothing invested yet. Every investment the vault makes appears here.</p>'; return; }
+  const rows = all.slice().reverse().filter(p =>
     (!fa || p.asset === fa) && (!fo || (fo === "gain") === (gainOf(p) >= 0)) && (!fs || (fs === "open") === p.open));
   if (!rows.length) { $("investments").innerHTML = '<p class="muted">No investment matches these filters.</p>'; return; }
   const body = rows.map(p => {
     const g = gainOf(p), pct = g / p.cost * 100;
     return `<tr class="inv" data-row="${p.id}"><td>${dateTime(p.openedAt)}</td><td class="mono">${token(p.asset)}</td>
-      <td>@${esc(p.trigger.handle)} · “${esc(p.trigger.text.slice(0, 40))}${p.trigger.text.length > 40 ? "…" : ""}”</td>
+      <td>${startedBy(p)}</td>
       <td class="num mono">${fmt(p.cost)}</td><td class="num mono">${fmtPrice(p.entry)}</td>
-      <td class="num mono">${fmtPrice(currentPrice(p))}${p.open ? " now" : ""}</td>
+      <td class="num mono">${fmtPrice(currentPrice(p))}${p.open ? (isLive ? ` <span class="muted small">verified ${verifiedAgo(p.asset)}</span>` : " now") : ""}</td>
       <td class="num mono ${g >= 0 ? "gain" : "loss"}">${fmtSigned(g)} (${fmtSigned(pct)}%)</td>
       <td><span class="badge ${p.open ? "info" : g >= 0 ? "ok" : "bad"}">${p.open ? "still open" : g >= 0 ? "gain" : "loss"}</span></td>
       <td>${p.open ? "open" : p.sellReason}</td></tr>` + (openDetail === p.id ? detailHtml(p) : "");
@@ -951,6 +1151,14 @@ function renderInvestments() {
 }
 
 function renderBlocked() {
+  if (isLive) { // a reverted call leaves no record on-chain; expired checks do
+    const expired = (live.state?.triggers ?? []).filter(t => t.status === "expired").sort((a, b) => (b.expiredAt ?? 0) - (a.expiredAt ?? 0));
+    $("blockedList").innerHTML = (expired.length ? expired.map(t => `<div class="item"><div class="meta">${t.expiredAt ? clock(t.expiredAt * 1000) : ""}</div>
+      Price check ${esc(t.id)} for ${token(t.asset)} expired: the signed price didn't confirm +${Units.bpsToPct(t.thresholdBps)}% in time. Nothing was invested.</div>`).join("")
+      : '<p class="muted small">No price check has expired.</p>') +
+      `<p class="muted small">Refused transactions leave no record on-chain; the agent's <a href="${esc(NETWORKS[Chain.chainId]?.agentConsole || "#")}" target="_blank" rel="noopener">Wire Desk</a> lists every refusal with its reason.</p>`;
+    return;
+  }
   const blocked = results.filter(r => !r.ok);
   $("blockedList").innerHTML = blocked.length ? blocked.map(r => `<div class="item"><div class="meta">${clock(r.time)}</div>${esc(r.text)}</div>`).join("")
     : '<p class="muted small">Nothing blocked yet.</p>';
@@ -961,6 +1169,7 @@ for (const id of ["fAsset", "fOutcome", "fStatus"]) $(id).onchange = renderInves
 $("tab-history").onclick = e => {
   const sell = e.target.closest("[data-sell]"), open = e.target.closest("[data-open]"), row = e.target.closest("tr.inv");
   if (sell) {
+    if (isLive) return;
     if (!ask("Sell this investment at a fresh signed price?")) return;
     try {
       const p = Mock.sell(+sell.dataset.sell);
@@ -1140,7 +1349,9 @@ async function refreshLive() {
   if (!live.ready || !Chain.account || refreshing) return;
   refreshing = true;
   try {
+    const previous = live.state?.blockNumber;
     live.state = await Chain.readState(Chain.account);
+    if (live.state.blockNumber !== previous) live.blockSeenAt = Date.now();
     showBanner("");
   } catch (err) {
     showBanner(`<b>Can't read the vault right now.</b> ${esc(err.shortMessage || err.message)} The page tries again on its own.`);
@@ -1157,8 +1368,11 @@ async function refreshLive() {
   renderLiveFeeds();
 }
 
-// Phase 4 fills the Activity and History tabs from the chain; until then they keep their practice content
-function renderLiveFeeds() {}
+function renderLiveFeeds() {
+  if (!live.state) return;
+  renderLiveActivity();
+  if (!$("tab-history").classList.contains("hidden")) renderHistory();
+}
 
 function onWalletAccount(address) {
   live.state = null;
@@ -1195,6 +1409,7 @@ async function startLive() {
   for (const s of LIMIT_SLIDERS) if (!draft.limits[s.key].confirmed) draft.limits[s.key].value = limitDefault(s.key);
   renderRuleBuilder();
   renderStats();
+  followAgentConsole();
   // A wallet that already allowed this page reconnects without a prompt
   if (window.ethereum) {
     const accounts = await window.ethereum.request({ method: "eth_accounts" }).catch(() => []);
