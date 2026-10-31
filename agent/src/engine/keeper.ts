@@ -10,6 +10,12 @@ import { getAsset, isPriceFresh, type Profiles, readSignedPrice } from '../profi
 
 const BPS = 10_000n;
 
+// The vault's take-profit target, entry * (1 + take profit) rounded up (Vault._checkTakeProfit uses Math.ceilDiv)
+export const takeProfitTarget = (entry: bigint, takeProfitBps: number) => {
+  const scaled = entry * (BPS + BigInt(takeProfitBps));
+  return (scaled + BPS - 1n) / BPS;
+};
+
 type SellParams = Pick<RuleAsset, 'takeProfitBps' | 'stagnationBandBps' | 'stagnationAfterSec' | 'stopLossBps'>;
 
 // The vault's sell checks, for a price the source took at `priceTime`. Stop loss first, so a crash is never read as
@@ -28,7 +34,7 @@ export const decideSell = (
   if (
     allowed.includes('take-profit') &&
     params.takeProfitBps > 0 &&
-    price >= (entry * (BPS + BigInt(params.takeProfitBps))) / BPS
+    price >= takeProfitTarget(entry, params.takeProfitBps)
   ) {
     return 'take-profit';
   }

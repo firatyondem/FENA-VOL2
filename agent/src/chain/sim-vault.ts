@@ -5,6 +5,7 @@ import type { Address, Hex } from 'viem';
 import { AttestationError, deriveRequestHash, type SignedResponse, verifySignedResponse } from '../airnode/attestation.ts';
 import { readUint } from '../airnode/projected-json.ts';
 import { checkTrend, type GateFailure } from '../engine/gates.ts';
+import { takeProfitTarget } from '../engine/keeper.ts';
 import { getAsset, priceRequest, type Profiles, readSignedPrice } from '../profiles.ts';
 import { latestTweetRequest, snowflakeTime } from '../sources/twitter.ts';
 import {
@@ -250,7 +251,7 @@ export class SimVault implements VaultPort {
     if (sourceTime < position.entryTime) throw new VaultRejection('PriceBeforeBuy');
     const entry = position.entryPrice;
     if (kind === 'take-profit') {
-      const target = asset.takeProfitBps === 0 ? undefined : (entry * (BPS + BigInt(asset.takeProfitBps))) / BPS;
+      const target = asset.takeProfitBps === 0 ? undefined : takeProfitTarget(entry, asset.takeProfitBps);
       if (target === undefined || p < target) throw new VaultRejection('TakeProfitNotReached');
     } else if (kind === 'stagnation') {
       if (asset.stagnationAfterSec === 0 || sourceTime < position.entryTime + asset.stagnationAfterSec) {
