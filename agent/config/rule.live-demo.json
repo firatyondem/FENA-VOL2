@@ -1,0 +1,22 @@
+{
+  "depositUsdc": 1000,
+  "buyAmountUsdc": 50,
+  "maxPerTradeUsdc": 50,
+  "dailyLimitUsdc": 200,
+  "accounts": ["fenahackdemo"],
+  "assets": [
+    {
+      "asset": "ETH",
+      "budgetShareBps": 10000,
+      "trendThresholdBps": 50,
+      "spikeCapBps": 1200,
+      "minWaitSec": 120,
+      "maxWindowSec": 14400,
+      "cooldownSec": 60,
+      "takeProfitBps": 800,
+      "stagnationBandBps": 100,
+      "stagnationAfterSec": 600,
+      "topics": ["Ethereum", "ETH", "crypto reserve", "SEC", "crypto rules", "stablecoin law", "Fed", "interest rates"]
+    }
+  ]
+}
