@@ -18,11 +18,22 @@ import { baseSepolia, foundry } from 'viem/chains';
 import { AUSD_DECIMALS, readAusdBalance, TWEET_PRICE_AUSD } from '../src/airnode/client.ts';
 import { ViemVault } from '../src/chain/viem-vault.ts';
 import { readBudgetSettings } from '../src/engine/budget.ts';
+import { redactUrls } from '../src/log.ts';
 import { activeWatchSet } from '../src/engine/watch-set.ts';
 import { loadProfiles } from '../src/profiles.ts';
 import { loadWatchlist } from '../src/sources/watchlist.ts';
 
 export const addressLink = (address: Address) => `https://sepolia.basescan.org/address/${address}`;
+
+// What an RPC failure says, in one line and without its URL: viem quotes the RPC URL in full, and a provider's carries
+// the API key
+export const describeRpcError = (error: unknown) => {
+  const { shortMessage, details, message } = error as { shortMessage?: string; details?: string; message?: string };
+  const text = shortMessage
+    ? [shortMessage, details].filter(Boolean).join(' ')
+    : (message ?? String(error)).split('\n')[0];
+  return redactUrls(text ?? '');
+};
 
 export interface WalletReport {
   agent?: { address: Address; eth: bigint };
@@ -124,8 +135,17 @@ if (import.meta.main) {
   const agentAddress = keyAddress(env, 'AGENT_PRIVATE_KEY');
   const payerAddress = keyAddress(env, 'PAYER_PRIVATE_KEY');
   const report: WalletReport = {};
-  if (agentAddress) report.agent = { address: agentAddress, eth: await client.getBalance({ address: agentAddress }) };
-  if (payerAddress) report.payer = { address: payerAddress, ausd: await readAusdBalance(ausdClient, payerAddress) };
+  let payerEth = 0n;
+  try {
+    if (agentAddress) report.agent = { address: agentAddress, eth: await client.getBalance({ address: agentAddress }) };
+    if (payerAddress) {
+      report.payer = { address: payerAddress, ausd: await readAusdBalance(ausdClient, payerAddress) };
+      payerEth = await ausdClient.getBalance({ address: payerAddress });
+    }
+  } catch (error) {
+    console.log(`✖ could not read the wallet balances: ${describeRpcError(error)}`);
+    process.exit(1);
+  }
 
   const watchlist = loadWatchlist(env);
   let watched: string[] | undefined;
@@ -150,7 +170,7 @@ if (import.meta.main) {
       report.rulesNamingAgent = rules.length;
       watched = activeWatchSet(rules);
     } catch (error) {
-      report.rulesUnavailable = (error as Error).message.split('\n')[0];
+      report.rulesUnavailable = describeRpcError(error);
     }
   }
 
@@ -160,7 +180,6 @@ if (import.meta.main) {
     console.log(`              ${formatEther(report.agent.eth)} ETH (gas for confirmTrigger, buys, expiries and sells)`);
   }
   if (report.payer) {
-    const payerEth = await ausdClient.getBalance({ address: report.payer.address });
     console.log(`Payer wallet  ${report.payer.address}  ${addressLink(report.payer.address)}`);
     console.log(`              ${formatUnits(report.payer.ausd, AUSD_DECIMALS)} aUSD (data), ${formatEther(payerEth)} ETH (not needed)`);
   }

@@ -4,7 +4,7 @@
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { SignedResponse } from '../airnode/attestation.ts';
-import type { EventLog } from '../log.ts';
+import { type EventLog, redactUrls } from '../log.ts';
 
 export interface ConsoleServerOptions {
   log: EventLog;
@@ -121,7 +121,7 @@ export const startConsoleServer = ({
     try {
       replyJson(request, response, 200, { asset, response: await cachedPrice(prices.fetch)(asset) });
     } catch (error) {
-      replyJson(request, response, 502, { error: `No signed price for ${asset}: ${(error as Error).message}` });
+      replyJson(request, response, 502, { error: `No signed price for ${asset}: ${redactUrls((error as Error).message)}` });
     }
   };
 
@@ -133,7 +133,7 @@ export const startConsoleServer = ({
     try {
       replyJson(request, response, 200, { asset, cases: await tamper.build(asset, cachedPrice(prices.fetch)) });
     } catch (error) {
-      replyJson(request, response, 502, { error: `No tamper set for ${asset}: ${(error as Error).message}` });
+      replyJson(request, response, 502, { error: `No tamper set for ${asset}: ${redactUrls((error as Error).message)}` });
     }
   };
 

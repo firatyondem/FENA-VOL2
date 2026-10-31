@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { type Address, parseEther, parseUnits } from 'viem';
+import { type Address, HttpRequestError, parseEther, parseUnits } from 'viem';
 import type { Rule } from '../src/chain/vault.ts';
 import { activeWatchSet } from '../src/engine/watch-set.ts';
 import {
   addressLink,
   checkWallets,
+  describeRpcError,
   estimateRuntimeHours,
   paidCallsPerHour,
   walletLimits,
@@ -99,4 +100,18 @@ test('the active watch set holds accounts of unpaused rules with linked assets o
 
 test('the basescan link names the address', () => {
   assert.equal(addressLink(AGENT), `https://sepolia.basescan.org/address/${AGENT}`);
+});
+
+test('an RPC error is described in one line, without the RPC URL and its key', () => {
+  const error = new HttpRequestError({
+    url: 'https://base-sepolia.g.alchemy.com/v2/AbCdEf0123456789secretKEY',
+    status: 403,
+    details: 'BASE_SEPOLIA is not enabled for this app',
+  });
+  assert.ok(error.message.includes('secretKEY'));
+  assert.equal(describeRpcError(error), 'HTTP request failed. BASE_SEPOLIA is not enabled for this app');
+  assert.equal(
+    describeRpcError(new Error('fetch failed for https://rpc.example.org/v2/secretKEY\nmore')),
+    'fetch failed for https://rpc.example.org/…'
+  );
 });

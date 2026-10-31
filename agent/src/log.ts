@@ -107,6 +107,30 @@ export type AgentEvent =
 
 export type LoggedEvent = AgentEvent & { seq: number; at: number };
 
+// Cuts every URL down to its scheme and host. An RPC URL carries its API key in the path (Alchemy's /v2/<key>), in the
+// query or before the host, and an error from viem quotes the URL in full. The log reaches the console, /api/state, the
+// frontend and the run report, so no URL leaves the agent with more than its host.
+export const redactUrls = (text: string) =>
+  text.replace(/\b(https?):\/\/(?:[^\s/?#@"'<>]*@)?([^\s/?#"'<>]+)([/?#][^\s"'<>]*)?/g, (_url, scheme, host, rest) =>
+    rest ? `${scheme}://${host}/…` : `${scheme}://${host}`
+  );
+
+const redactStrings = (value: unknown): unknown => {
+  if (typeof value === 'string') return redactUrls(value);
+  if (Array.isArray(value)) return value.map(redactStrings);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, field]) => [key, redactStrings(field)]));
+  }
+  return value;
+};
+
+// Every string of an event goes out redacted, error messages and rejection reasons above all. A post's own text is
+// left as it is: its links are the post's, and it comes from TwitterAPI.io, never from the agent's configuration.
+const redactEvent = (event: AgentEvent): AgentEvent => {
+  const redacted = redactStrings(event) as AgentEvent;
+  return event.kind === 'post.seen' && redacted.kind === 'post.seen' ? { ...redacted, text: event.text } : redacted;
+};
+
 export interface EventLogOptions {
   // JSON lines are appended here when set
   file?: URL;
@@ -133,7 +157,7 @@ export class EventLog {
   }
 
   append(event: AgentEvent): LoggedEvent {
-    const logged = { ...event, seq: ++this.seq, at: this.now() } as LoggedEvent;
+    const logged = { ...redactEvent(event), seq: ++this.seq, at: this.now() } as LoggedEvent;
     this.events.push(logged);
     if (this.events.length > this.capacity) this.events.splice(0, this.events.length - this.capacity);
     if (this.file) appendFileSync(this.file, `${JSON.stringify(logged)}\n`);
