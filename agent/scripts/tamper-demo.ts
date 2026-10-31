@@ -27,7 +27,7 @@ if (!VAULT_ADDRESS || !TRIGGER_ID) {
   }
 } else {
   if (!isAddress(VAULT_ADDRESS) || !RPC_URL || !AGENT_PRIVATE_KEY) throw new Error('Set VAULT_ADDRESS, RPC_URL and AGENT_PRIVATE_KEY');
-  const chain = Number(process.env.CHAIN_ID ?? baseSepolia.id) === foundry.id ? foundry : baseSepolia;
+  const chain = Number(process.env.CHAIN_ID || baseSepolia.id) === foundry.id ? foundry : baseSepolia;
   const account = privateKeyToAccount(AGENT_PRIVATE_KEY as Hex);
   const vault = new ViemVault({
     address: VAULT_ADDRESS,
