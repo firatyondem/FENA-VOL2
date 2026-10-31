@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseEther, parseUnits } from 'viem';
 import type { SignedResponse } from '../src/airnode/attestation.ts';
-import { type Rule, VaultRejection, type VaultPort } from '../src/chain/vault.ts';
+import { type Rule, TxTimeout, VaultRejection, type VaultPort } from '../src/chain/vault.ts';
 import {
   Budget,
   BudgetRefusal,
@@ -242,6 +242,17 @@ test('a refused write is not counted, and a vault rejection is not counted eithe
   };
   await assert.rejects(new GuardedVault(rejecting, budget).confirmTrigger('1', {} as SignedResponse), VaultRejection);
   assert.equal(budget.status().txLastHour, 0);
+});
+
+test('a timed-out transaction was sent, so it counts toward the hourly cap', async () => {
+  const { budget } = setup();
+  await budget.check();
+  const stuck = recordingVault().vault;
+  stuck.expireTrigger = async () => {
+    throw new TxTimeout('0x01', 90_000);
+  };
+  await assert.rejects(new GuardedVault(stuck, budget).expireTrigger('1'), TxTimeout);
+  assert.equal(budget.status().txLastHour, 1);
 });
 
 test('a paid call is refused while halted; free Airnodes always pass', async () => {

@@ -4,7 +4,7 @@ import { formatUnits } from 'viem';
 import type { SignedResponse } from '../airnode/attestation.ts';
 import { formatFixedPoint } from '../airnode/projected-json.ts';
 import type { Position, RuleAsset, SellKind, VaultPort } from '../chain/vault.ts';
-import { VaultRejection } from '../chain/vault.ts';
+import { transactionFields, VaultRejection } from '../chain/vault.ts';
 import type { EventLog } from '../log.ts';
 import { getAsset, isPriceFresh, type Profiles, readSignedPrice } from '../profiles.ts';
 
@@ -90,6 +90,7 @@ export class SellKeeper {
           sellKind: kind,
           price: formatFixedPoint(sold.price, 18),
           usdcOut: formatUnits(sold.usdcOut, profiles.usdcDecimals),
+          ...transactionFields(sold),
         });
       } catch (error) {
         const message = error instanceof VaultRejection ? error.reason : (error as Error).message;

@@ -214,6 +214,27 @@ test('a flat price keeps the trigger waiting, then it expires', async () => {
   assert.equal(engine.pendingTriggers().length, 0);
 });
 
+test('each transaction event carries its hash and the gas it cost the agent', async () => {
+  const { clock, state, vault, engine, last } = setup({ prices: {} });
+  // The SimVault sends nothing; stand in for a chain that reports each transaction's hash and gas
+  const open = vault.openTrigger.bind(vault);
+  vault.openTrigger = async (input) => ({ ...(await open(input)), txHash: '0x01', gasWei: 300_000_000_000_000n });
+  const expire = vault.expireTrigger.bind(vault);
+  vault.expireTrigger = async (triggerId) => {
+    await expire(triggerId);
+    return { txHash: '0x02', gasWei: 50_000_000_000_000n };
+  };
+  await engine.pollAccount(trump);
+  assert.equal(last('trigger.opened')?.txHash, '0x01');
+  assert.equal(last('trigger.opened')?.gasEth, '0.0003');
+
+  clock.now = P0_TIME + 601;
+  state.prices.ETH = 'eth-p1-flat.json';
+  await engine.checkPending();
+  assert.equal(last('trigger.expired')?.txHash, '0x02');
+  assert.equal(last('trigger.expired')?.gasEth, '0.00005');
+});
+
 test('a spike above the cap is never submitted', async () => {
   const { clock, state, engine, vault, kinds } = setup();
   await engine.pollAccount(trump);

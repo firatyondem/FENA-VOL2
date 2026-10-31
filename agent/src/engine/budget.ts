@@ -7,7 +7,7 @@
 import { formatEther, formatUnits, parseEther, parseUnits } from 'viem';
 import { AUSD_DECIMALS } from '../airnode/client.ts';
 import type { SignedResponse } from '../airnode/attestation.ts';
-import type { OpenTriggerInput, SellKind, VaultPort } from '../chain/vault.ts';
+import { type OpenTriggerInput, type SellKind, TxTimeout, type VaultPort } from '../chain/vault.ts';
 import type { EventLog } from '../log.ts';
 import type { AgentMode, Balances, HealthPort } from './cycle.ts';
 
@@ -248,9 +248,15 @@ export class GuardedVault implements VaultPort {
 
   private async write<T>(functionName: Parameters<Budget['assertWrite']>[0], send: () => Promise<T>): Promise<T> {
     this.budget.assertWrite(functionName);
-    const result = await send();
-    this.budget.recordTransaction();
-    return result;
+    try {
+      const result = await send();
+      this.budget.recordTransaction();
+      return result;
+    } catch (error) {
+      // A timed-out transaction was sent and may still cost gas, so it counts toward the hourly cap
+      if (error instanceof TxTimeout) this.budget.recordTransaction();
+      throw error;
+    }
   }
 
   openTrigger(input: OpenTriggerInput) {

@@ -87,6 +87,7 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
       profiles,
       watchlist,
       fromBlock: BigInt(deployment.deployedAtBlock),
+      txTimeoutMs: Number(process.env.TX_TIMEOUT_MS || 90_000),
     }),
     budget
   );

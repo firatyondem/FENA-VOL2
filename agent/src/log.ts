@@ -24,6 +24,8 @@ export type AgentEvent =
       thresholdBps: number;
       spikeCapBps: number;
       txHash?: string;
+      // What the transaction cost the agent wallet in gas
+      gasEth?: string;
     }
   | { kind: 'trigger.checked'; triggerId: string; asset: string; p1: string; changeBps: number; verdict: string }
   | {
@@ -35,10 +37,20 @@ export type AgentEvent =
       assetOut: string;
       price: string;
       txHash?: string;
+      gasEth?: string;
     }
   | { kind: 'trigger.rejected'; triggerId?: string; asset: string; stage: 'open' | 'confirm'; reason: string }
-  | { kind: 'trigger.expired'; triggerId: string; asset: string }
-  | { kind: 'position.sold'; positionId: string; asset: string; sellKind: string; price: string; usdcOut: string }
+  | { kind: 'trigger.expired'; triggerId: string; asset: string; txHash?: string; gasEth?: string }
+  | {
+      kind: 'position.sold';
+      positionId: string;
+      asset: string;
+      sellKind: string;
+      price: string;
+      usdcOut: string;
+      txHash?: string;
+      gasEth?: string;
+    }
   | { kind: 'payment.settled'; transaction: string }
   | { kind: 'tamper.result'; name: string; expected: string; actual: string; passed: boolean }
   | {

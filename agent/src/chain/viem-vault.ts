@@ -16,6 +16,7 @@ import {
   type PublicClient,
   toHex,
   type Transport,
+  WaitForTransactionReceiptTimeoutError,
   type WalletClient,
 } from 'viem';
 import { deriveRequestHash, type SignedResponse } from '../airnode/attestation.ts';
@@ -24,12 +25,14 @@ import { latestTweetRequest, type WatchedAccount } from '../sources/twitter.ts';
 import { vaultAbi } from './vault-abi.ts';
 import {
   type Bought,
+  type Expired,
   type OpenedTrigger,
   type OpenTriggerInput,
   type Position,
   type Rule,
   type SellKind,
   type Sold,
+  TxTimeout,
   VaultRejection,
   type VaultPort,
 } from './vault.ts';
@@ -80,6 +83,8 @@ export interface ViemVaultOptions {
   fromBlock?: bigint;
   // Seconds a rule read stays fresh
   cacheSec?: number;
+  // How long a sent transaction may take to be mined before the agent gives up on it for this cycle
+  txTimeoutMs?: number;
 }
 
 export class ViemVault implements VaultPort {
@@ -217,10 +222,27 @@ export class ViemVault implements VaultPort {
     });
   }
 
+  // A dropped transaction must not hang the agent: viem's own timeout, and a timer of ours in case the client never answers
+  private async waitForReceipt(hash: Hash) {
+    const { publicClient, txTimeoutMs = 90_000 } = this.options;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new TxTimeout(hash, txTimeoutMs)), txTimeoutMs);
+    });
+    try {
+      return await Promise.race([publicClient.waitForTransactionReceipt({ hash, timeout: txTimeoutMs }), timeout]);
+    } catch (error) {
+      if (error instanceof WaitForTransactionReceiptTimeoutError) throw new TxTimeout(hash, txTimeoutMs);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private async send(
     functionName: 'openTrigger' | 'confirmTrigger' | 'expireTrigger' | 'sell',
     args: readonly unknown[]
-  ): Promise<{ hash: Hash; logs: Log[] }> {
+  ): Promise<{ hash: Hash; logs: Log[]; gasWei?: bigint }> {
     const { publicClient, walletClient, address } = this.options;
     try {
       const { request } = await publicClient.simulateContract({
@@ -232,11 +254,16 @@ export class ViemVault implements VaultPort {
       });
       // The request's ABI holds only this function; the whole ABI names a revert that first shows up at send time
       const hash = await walletClient.writeContract({ ...request, abi: vaultAbi } as never);
-      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      const receipt = await this.waitForReceipt(hash);
       if (receipt.status !== 'success') throw new VaultRejection('Reverted', hash);
-      return { hash, logs: receipt.logs };
+      const { gasUsed, effectiveGasPrice } = receipt;
+      return {
+        hash,
+        logs: receipt.logs,
+        ...(gasUsed !== undefined && effectiveGasPrice !== undefined ? { gasWei: gasUsed * effectiveGasPrice } : {}),
+      };
     } catch (error) {
-      if (error instanceof VaultRejection) throw error;
+      if (error instanceof VaultRejection || error instanceof TxTimeout) throw error;
       // Only a revert is the vault saying no; any other failure passes through, so the caller can try again
       const name = revertName(error);
       if (name) throw new VaultRejection(name);
@@ -245,34 +272,35 @@ export class ViemVault implements VaultPort {
   }
 
   async openTrigger({ ruleId, asset, post, p0 }: OpenTriggerInput): Promise<OpenedTrigger> {
-    const { hash, logs } = await this.send('openTrigger', [
+    const { hash, logs, gasWei } = await this.send('openTrigger', [
       ruleId,
       assetIdOf(asset),
       toVaultResponse(post),
       toVaultResponse(p0),
     ]);
-    return { triggerId: readEvent(logs, 'TriggerOpened').args.triggerId.toString(), txHash: hash };
+    return { triggerId: readEvent(logs, 'TriggerOpened').args.triggerId.toString(), txHash: hash, gasWei };
   }
 
   async confirmTrigger(triggerId: string, p1: SignedResponse): Promise<Bought> {
-    const { hash, logs } = await this.send('confirmTrigger', [BigInt(triggerId), toVaultResponse(p1)]);
+    const { hash, logs, gasWei } = await this.send('confirmTrigger', [BigInt(triggerId), toVaultResponse(p1)]);
     const { args } = readEvent(logs, 'TriggerConfirmed');
     const positionId = args.positionId.toString();
     await this.loadPosition(positionId);
-    return { triggerId, positionId, usdcIn: args.quoteIn, assetOut: args.assetOut, price: args.p1, txHash: hash };
+    return { triggerId, positionId, usdcIn: args.quoteIn, assetOut: args.assetOut, price: args.p1, txHash: hash, gasWei };
   }
 
-  async expireTrigger(triggerId: string): Promise<void> {
-    await this.send('expireTrigger', [BigInt(triggerId)]);
+  async expireTrigger(triggerId: string): Promise<Expired> {
+    const { hash, gasWei } = await this.send('expireTrigger', [BigInt(triggerId)]);
+    return { txHash: hash, gasWei };
   }
 
   async sell(positionId: string, kind: SellKind, price: SignedResponse): Promise<Sold> {
     const reason = SELL_REASONS[kind];
     if (reason === undefined) throw new VaultRejection('SellKindNotSupported', kind);
-    const { hash, logs } = await this.send('sell', [BigInt(positionId), reason, toVaultResponse(price)]);
+    const { hash, logs, gasWei } = await this.send('sell', [BigInt(positionId), reason, toVaultResponse(price)]);
     const { args } = readEvent(logs, 'PositionSold');
     const position = this.positions.get(positionId);
     if (position) position.open = false;
-    return { positionId, usdcOut: args.quoteOut, price: args.price, txHash: hash };
+    return { positionId, usdcOut: args.quoteOut, price: args.price, txHash: hash, gasWei };
   }
 }

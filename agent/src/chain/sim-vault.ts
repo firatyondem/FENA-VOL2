@@ -10,6 +10,7 @@ import { getAsset, priceRequest, type Profiles, readSignedPrice } from '../profi
 import { latestTweetRequest, snowflakeTime } from '../sources/twitter.ts';
 import {
   type Bought,
+  type Expired,
   type OpenedTrigger,
   type OpenTriggerInput,
   type Position,
@@ -232,7 +233,8 @@ export class SimVault implements VaultPort {
     return { triggerId, positionId, usdcIn, assetOut, price: p1.price };
   }
 
-  async expireTrigger(triggerId: string): Promise<void> {
+  // Nothing is mined in memory, so there is no hash or gas to report
+  async expireTrigger(triggerId: string): Promise<Expired | void> {
     const trigger = this.triggers.get(triggerId);
     if (!trigger || trigger.status !== 'open') throw new VaultRejection('TriggerNotOpen', triggerId);
     const asset = this.ruleAsset(this.rule(trigger.ruleId), trigger.asset);

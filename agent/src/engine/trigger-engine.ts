@@ -5,7 +5,7 @@ import { type Address, formatUnits } from 'viem';
 import { deriveRequestHash, type SignedResponse, verifySignedResponse } from '../airnode/attestation.ts';
 import { formatFixedPoint } from '../airnode/projected-json.ts';
 import { prefilter, type Candidate, type Classification, type Classifier } from '../classifier/types.ts';
-import { type Rule, type RuleAsset, VaultRejection, type VaultPort } from '../chain/vault.ts';
+import { type Expired, type Rule, type RuleAsset, transactionFields, VaultRejection, type VaultPort } from '../chain/vault.ts';
 import type { EventLog } from '../log.ts';
 import { getAsset, isPriceFresh, type Profiles, readSignedPrice, type SignedPrice } from '../profiles.ts';
 import { latestTweetRequest, type Post, readSignedPost, type WatchedAccount } from '../sources/twitter.ts';
@@ -206,7 +206,7 @@ export class TriggerEngine {
           closesAt: p0.sourceTime + params.maxWindowSec,
           thresholdBps: params.trendThresholdBps,
           spikeCapBps: params.spikeCapBps,
-          ...(opened.txHash ? { txHash: opened.txHash } : {}),
+          ...transactionFields(opened),
         });
       } catch (error) {
         if (error instanceof VaultRejection) {
@@ -266,7 +266,7 @@ export class TriggerEngine {
           usdcIn: formatUnits(bought.usdcIn, profiles.usdcDecimals),
           assetOut: formatUnits(bought.assetOut, 18),
           price: price18(bought.price),
-          ...(bought.txHash ? { txHash: bought.txHash } : {}),
+          ...transactionFields(bought),
         });
       } catch (error) {
         const reason = error instanceof VaultRejection ? error.reason : errorMessage(error);
@@ -277,8 +277,9 @@ export class TriggerEngine {
   }
 
   private async expire(trigger: PendingTrigger) {
+    let expired: Expired | void = undefined;
     try {
-      await this.deps.vault.expireTrigger(trigger.triggerId);
+      expired = await this.deps.vault.expireTrigger(trigger.triggerId);
     } catch (error) {
       if (!(error instanceof VaultRejection && error.reason === 'TriggerNotOpen')) {
         this.deps.log.append({ kind: 'error', where: `expire ${trigger.triggerId}`, message: errorMessage(error) });
@@ -286,6 +287,11 @@ export class TriggerEngine {
       }
     }
     this.pending.delete(trigger.triggerId);
-    this.deps.log.append({ kind: 'trigger.expired', triggerId: trigger.triggerId, asset: trigger.asset });
+    this.deps.log.append({
+      kind: 'trigger.expired',
+      triggerId: trigger.triggerId,
+      asset: trigger.asset,
+      ...transactionFields(expired),
+    });
   }
 }

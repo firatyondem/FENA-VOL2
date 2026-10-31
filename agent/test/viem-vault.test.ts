@@ -7,10 +7,11 @@ import {
   decodeFunctionData,
   encodeErrorResult,
   type Hex,
+  WaitForTransactionReceiptTimeoutError,
 } from 'viem';
 import type { SignedResponse } from '../src/airnode/attestation.ts';
 import { vaultAbi } from '../src/chain/vault-abi.ts';
-import { VaultRejection } from '../src/chain/vault.ts';
+import { TxTimeout, VaultRejection } from '../src/chain/vault.ts';
 import { assetIdOf, revertReason, toVaultResponse, ViemVault } from '../src/chain/viem-vault.ts';
 import { loadProfiles } from '../src/profiles.ts';
 import { readSharedJson } from './helpers.ts';
@@ -114,6 +115,52 @@ test('an RPC failure is not a refusal: it passes through so the engine retries',
     }),
     (error) => !(error instanceof VaultRejection) && /fetch failed/.test(String(error))
   );
+});
+
+// A vault whose simulation passes and whose send returns HASH; `receipt` decides what mining does
+const HASH: Hex = `0x${'ab'.repeat(32)}`;
+const sendingVault = (receipt: () => Promise<unknown>, txTimeoutMs?: number) =>
+  new ViemVault({
+    address: VAULT,
+    publicClient: {
+      simulateContract: async (params: unknown) => ({ request: params }),
+      waitForTransactionReceipt: receipt,
+    } as never,
+    walletClient: { account: { address: USER }, writeContract: async () => HASH } as never,
+    profiles: loadProfiles(),
+    watchlist: [],
+    ...(txTimeoutMs === undefined ? {} : { txTimeoutMs }),
+  });
+
+test('a stuck transaction times out with its hash instead of hanging the agent', async () => {
+  // A client that never answers, as with a dropped transaction
+  const vault = sendingVault(() => new Promise(() => {}), 20);
+  const started = Date.now();
+  await assert.rejects(vault.expireTrigger('7'), (error: unknown) => {
+    assert.ok(error instanceof TxTimeout, 'a timeout, not a vault refusal');
+    assert.ok(!(error instanceof VaultRejection));
+    assert.equal(error.hash, HASH);
+    assert.match(error.message, new RegExp(HASH));
+    return true;
+  });
+  assert.ok(Date.now() - started < 2000, 'gave up at the timeout');
+});
+
+test("viem's own receipt timeout becomes a TxTimeout too", async () => {
+  const vault = sendingVault(async () => {
+    throw new WaitForTransactionReceiptTimeoutError({ hash: HASH });
+  });
+  await assert.rejects(vault.expireTrigger('7'), (error: unknown) => error instanceof TxTimeout && error.hash === HASH);
+});
+
+test('a mined transaction reports its gas: gasUsed times the effective gas price', async () => {
+  const vault = sendingVault(async () => ({
+    status: 'success',
+    logs: [],
+    gasUsed: 60_000n,
+    effectiveGasPrice: 1_500_000_000n,
+  }));
+  assert.deepEqual(await vault.expireTrigger('7'), { txHash: HASH, gasWei: 90_000_000_000_000n });
 });
 
 test('names a revert that first shows up when the transaction is sent', async () => {
