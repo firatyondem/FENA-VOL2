@@ -19,8 +19,6 @@ import {
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { foundry } from 'viem/chains';
-import { deriveRequestHash } from '../../src/airnode/attestation.ts';
-import { signResponse } from '../../src/airnode/sign.ts';
 import { applyRule, type RuleConfig } from '../../src/chain/setup.ts';
 import { vaultAbi } from '../../src/chain/vault-abi.ts';
 import { VaultRejection } from '../../src/chain/vault.ts';
@@ -29,21 +27,16 @@ import type { Candidate, Classification, Classifier } from '../../src/classifier
 import { SellKeeper } from '../../src/engine/keeper.ts';
 import { TriggerEngine } from '../../src/engine/trigger-engine.ts';
 import { EventLog, type LoggedEvent } from '../../src/log.ts';
-import { getAsset, loadProfiles, priceRequest } from '../../src/profiles.ts';
-import { latestTweetRequest, snowflakeAt, type WatchedAccount } from '../../src/sources/twitter.ts';
-import { ATTACKER_KEY, FIXTURE_AIRNODE_KEY, formatXDate } from '../../scripts/fixture-set.ts';
+import { loadProfiles } from '../../src/profiles.ts';
+import type { WatchedAccount } from '../../src/sources/twitter.ts';
+import { ATTACKER_KEY, FIXTURE_AIRNODE_KEY } from '../../scripts/fixture-set.ts';
+import { ANVIL_KEYS, advanceChain, chainTime, signFixturePost, signFixturePrice } from '../../scripts/local-chain.ts';
 
 const PORT = 8547;
 const RPC = `http://127.0.0.1:${PORT}`;
 const CONTRACTS = fileURLToPath(new URL('../../../contracts/', import.meta.url));
 const DEPLOYMENT = new URL('../../../shared/deployments/e2e-31337.json', import.meta.url);
-// anvil's first four default accounts: public, test-only keys
-const KEYS = {
-  deployer: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
-  user: '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d',
-  agent: '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a',
-  keeper: '0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6',
-} as const satisfies Record<string, Hex>;
+const KEYS = { deployer: ANVIL_KEYS.deployer, user: ANVIL_KEYS.one, agent: ANVIL_KEYS.two, keeper: ANVIL_KEYS.three };
 
 const hasTool = (name: string) => spawnSync(name, ['--version'], { stdio: 'ignore', shell: false }).status === 0;
 const toolsMissing = !hasTool('anvil') || !hasTool('forge');
@@ -70,16 +63,14 @@ const testClient = createTestClient({ mode: 'anvil', chain: foundry, transport: 
 const wallet = (key: Hex) => createWalletClient({ chain: foundry, transport: http(RPC), account: privateKeyToAccount(key) });
 
 const syncClock = async () => {
-  clock.now = Number((await publicClient.getBlock()).timestamp);
+  clock.now = await chainTime(publicClient);
 };
 const advance = async (seconds: number) => {
-  await testClient.increaseTime({ seconds });
-  await testClient.mine({ blocks: 1 });
-  await syncClock();
+  clock.now = await advanceChain(testClient, publicClient, seconds);
 };
 
 const signedPrice = (asset: string, price: string, at: number, key: Hex = FIXTURE_AIRNODE_KEY, requestAsset = asset) =>
-  signResponse(key, deriveRequestHash(priceRequest(getAsset(profiles, requestAsset))), at, `{"price":${price},"updatedAt":${at * 1000}}`);
+  signFixturePrice(profiles, asset, price, at, key, requestAsset);
 
 const agentVault = () =>
   new ViemVault({
@@ -156,17 +147,12 @@ const makeEngine = (vault: ViemVault) =>
     now: () => clock.now,
     tweetAirnode: fixtureAirnode,
     fetchLatestPost: async () =>
-      signResponse(
-        FIXTURE_AIRNODE_KEY,
-        deriveRequestHash(latestTweetRequest(trump)),
-        clock.now,
-        JSON.stringify({
-          author: 'realDonaldTrump',
-          createdAt: formatXDate(postTime),
-          id: snowflakeAt(postTime, 1n),
-          text: 'We are coming for Venezuela. Big things are happening!',
-        })
-      ),
+      signFixturePost({
+        handle: 'realDonaldTrump',
+        createdAt: postTime,
+        signedAt: clock.now,
+        text: 'We are coming for Venezuela. Big things are happening!',
+      }),
     fetchPrice,
   });
 

@@ -18,7 +18,8 @@
     "tamper-demo": "node --env-file-if-exists=.env scripts/tamper-demo.ts",
     "export-abi": "node scripts/export-abi.ts",
     "test:e2e": "node --test test/e2e/*.e2e.ts",
-    "set-rule": "node --env-file-if-exists=.env scripts/set-rule.ts"
+    "set-rule": "node --env-file-if-exists=.env scripts/set-rule.ts",
+    "local-stage": "node scripts/local-stage.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
