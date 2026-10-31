@@ -24,6 +24,10 @@ export const advanceChain = async (testClient: TestClient, publicClient: PublicC
   return chainTime(publicClient);
 };
 
+// The time the next transaction will see. An idle anvil's latest block can be minutes old, and a price signed at that
+// time would already be stale when mined, so this mines a block first.
+export const chainNow = (testClient: TestClient, publicClient: PublicClient) => advanceChain(testClient, publicClient, 0);
+
 export interface FixturePost {
   handle: string;
   // Seconds; the Snowflake id encodes it, as a real X id does

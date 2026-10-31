@@ -26,7 +26,7 @@ import { vaultAbi } from '../src/chain/vault-abi.ts';
 import { type SellKind, VaultRejection } from '../src/chain/vault.ts';
 import { assetIdOf, ViemVault } from '../src/chain/viem-vault.ts';
 import { loadProfiles } from '../src/profiles.ts';
-import { ANVIL_KEYS, advanceChain, chainTime, signFixturePost, signFixturePrice } from './local-chain.ts';
+import { ANVIL_KEYS, advanceChain, chainNow, signFixturePost, signFixturePrice } from './local-chain.ts';
 
 // Starting prices for P0 when --price is not given, close to the markets' late-October levels
 const DEFAULT_PRICES: Record<string, string> = { ETH: '2000', BTC: '77000', DOGE: '0.075845', OIL: '70.25', TSLA: '420' };
@@ -95,7 +95,7 @@ const assetRule = async (user: Address, assetId: Hex) => (await read<[boolean, A
 
 // Waits on anvil's clock until `target`, if it is not there yet
 const advanceTo = async (target: number) => {
-  const now = await chainTime(publicClient);
+  const now = await chainNow(testClient, publicClient);
   return advanceChain(testClient, publicClient, Math.max(0, target - now));
 };
 
@@ -116,7 +116,7 @@ const open = async () => {
   const user: Address = isAddress(input) ? input : fail(`--user ${input} is not an address`);
   const asset = (values.asset ?? fail('open needs --asset')).toUpperCase();
   const price = values.price ?? DEFAULT_PRICES[asset] ?? fail(`No default price for ${asset}; pass --price`);
-  const now = await chainTime(publicClient);
+  const now = await chainNow(testClient, publicClient);
   // The post's id encodes a minute ago, and P0 is taken now: inside the vault's 10-minute post-to-P0 window
   const post = await signFixturePost({
     handle: values.account,
@@ -156,7 +156,7 @@ const sell = async () => {
   const position = await read<Position>('getPosition', [BigInt(id)]);
   if (!position.isOpen) fail(`Position ${id} is not open`);
   const asset = keyOf(position.assetId);
-  let now = await chainTime(publicClient);
+  let now = await chainNow(testClient, publicClient);
   if (kind === 'stagnation') {
     const rule = await assetRule(position.user, position.assetId);
     now = await advanceTo(Number(position.openedAt) + rule.stagnationDelay + 5);

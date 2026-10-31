@@ -230,7 +230,8 @@ export class ViemVault implements VaultPort {
         args: args as never,
         account: walletClient.account,
       });
-      const hash = await walletClient.writeContract(request as never);
+      // The request's ABI holds only this function; the whole ABI names a revert that first shows up at send time
+      const hash = await walletClient.writeContract({ ...request, abi: vaultAbi } as never);
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
       if (receipt.status !== 'success') throw new VaultRejection('Reverted', hash);
       return { hash, logs: receipt.logs };

@@ -115,3 +115,34 @@ test('an RPC failure is not a refusal: it passes through so the engine retries',
     (error) => !(error instanceof VaultRejection) && /fetch failed/.test(String(error))
   );
 });
+
+test('names a revert that first shows up when the transaction is sent', async () => {
+  // Like viem: the simulation passes and hands back a request whose ABI holds only the called function, and the send
+  // decodes its revert with the ABI it was given
+  const publicClient = {
+    simulateContract: async (params: { functionName: string; args: unknown[] }) => ({
+      request: { ...params, abi: vaultAbi.filter((item) => 'name' in item && item.name === params.functionName) },
+    }),
+  };
+  const walletClient = {
+    account: { address: USER },
+    writeContract: async (request: { abi: typeof vaultAbi; functionName: string }) => {
+      throw new ContractFunctionExecutionError(
+        new ContractFunctionRevertedError({
+          abi: request.abi,
+          data: encodeErrorResult({ abi: vaultAbi, errorName: 'ResponseTooOld', args: [1n] }),
+          functionName: request.functionName,
+        }),
+        { abi: request.abi, functionName: request.functionName, args: [], contractAddress: VAULT }
+      );
+    },
+  };
+  const vault = new ViemVault({
+    address: VAULT,
+    publicClient: publicClient as never,
+    walletClient: walletClient as never,
+    profiles: loadProfiles(),
+    watchlist: [],
+  });
+  await assert.rejects(vault.expireTrigger('1'), { reason: 'ResponseTooOld' });
+});
