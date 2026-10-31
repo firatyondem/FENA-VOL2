@@ -22,5 +22,11 @@
     "label": "Marco Rubio",
     "assets": ["OIL"],
     "pinned": false
+  },
+  {
+    "handle": "fenahackdemo",
+    "label": "FENA demo account",
+    "assets": ["ETH", "BTC", "DOGE"],
+    "pinned": false
   }
 ]

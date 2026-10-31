@@ -58,6 +58,7 @@ assets, limits, watched accounts and topics. It finds open positions from `Trigg
 | `npm run request-hashes` | Writes the hashes the deploy registers to `shared/deployments/request-hashes.json` |
 | `npm run export-abi` | Copies the compiled ABIs for the agent and the frontend |
 | `npm run set-rule` | Funds a user and sets their rule (`USER_PRIVATE_KEY`, `AGENT_PRIVATE_KEY`) |
+| `npm run add-account -- <handle>` | Registers an account from `config/watchlist.json` on the deployed vault, after `npm run request-hashes` (`OWNER_PRIVATE_KEY`, the deployer's key) |
 | `npm run fetch-prices -- ETH OIL --save` | Fetches and verifies live signed prices |
 | `npm run tamper-demo` | A fresh real response and its four forgeries, judged by the deployed vault's `checkPrice`: no wallet, no gas. With `TRIGGER_ID` and `AGENT_PRIVATE_KEY` they go to that open ETH trigger instead; without `RPC_URL` or a deployment, to the in-memory vault |
 | `npm run tamper-demo -- --response my.json --asset ETH` | Your own signed response, judged the same way |
