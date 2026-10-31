@@ -37,7 +37,7 @@ with verified source. Its read-only `checkPrice` runs the same `_readPrice` as e
 response you like with no wallet or gas, and nothing can move:
 
 ```bash
-cd agent && npm install && RPC_URL=https://sepolia.base.org npm run tamper-demo
+cd agent && npm install && RPC_URL=https://base-sepolia-rpc.publicnode.com npm run tamper-demo
 ```
 
 Or paste your own response into the app's "For judges" page. On the deployed vault, a fresh Nodary price was accepted
