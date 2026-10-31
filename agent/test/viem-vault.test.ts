@@ -323,6 +323,15 @@ test('a provider that refuses the range gets half as many blocks, and the scan g
   ]);
 });
 
+test("the public Base Sepolia RPC's own wording counts as a refused range", async () => {
+  const { chain, ruleSet, vault } = scanningChain();
+  chain.head = 1_100n;
+  ruleSet(1_050n, 50n);
+  for (const attempt of [1, 2, 3, 4]) chain.failures.set(attempt, new Error('eth_getLogs is limited to a 200 range'));
+  assert.equal((await vault.listRules())[0]?.buyAmount, 50n);
+  assert.deepEqual(chain.ranges.at(-1), ['RuleSet', 1_000n, 1_100n], 'the span halves until the provider accepts it');
+});
+
 test('an RPC failure mid-scan passes through, and the next read resumes after the last good chunk', async () => {
   const { chain, ruleSet, vault } = scanningChain();
   ruleSet(3_500n, 50n);

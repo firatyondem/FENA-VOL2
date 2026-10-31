@@ -98,7 +98,7 @@ const LOG_CHUNK_BLOCKS = 2000n;
 // A provider's way of saying the block range or the result is too large, as opposed to an outage or a rate limit
 export const isRangeTooLarge = (error: unknown) => {
   const text = error instanceof BaseError ? `${error.shortMessage} ${error.details}` : String(error);
-  return /block range|range (is )?too (large|wide|big)|exceeds? (the )?max|response size|more than \d+ (results|logs)/i.test(text);
+  return /block range|range (is )?too (large|wide|big)|limited to (a )?\d+|exceeds? (the )?max|response size|more than \d+ (results|logs)/i.test(text);
 };
 
 export const readEvent = <Name extends EventName>(logs: Log[], eventName: Name) => {
