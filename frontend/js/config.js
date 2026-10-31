@@ -50,9 +50,9 @@ const DEFAULT_CHAIN_ID = 31337;
 const NETWORKS = {
   31337: { name: "Anvil (local)", rpc: "http://127.0.0.1:8545", agent: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
            agentConsole: "http://127.0.0.1:4173", explorer: null, pollMs: 2000 },
-  // logChunk: the public RPC answers getLogs for at most 200 blocks
-  84532: { name: "Base Sepolia", rpc: "https://sepolia.base.org", agent: "0x6fDA8cFC033C531f1D682655Ba4eF9038b7C80f8" /* set at go-live */,
-           agentConsole: "http://127.0.0.1:4173", explorer: "https://sepolia.basescan.org", pollMs: 5000, logChunk: 200 },
+  // publicnode, because sepolia.base.org answers getLogs for only 200 blocks, which keeps a judge waiting
+  84532: { name: "Base Sepolia", rpc: "https://base-sepolia-rpc.publicnode.com", agent: "0x6fDA8cFC033C531f1D682655Ba4eF9038b7C80f8" /* set at go-live */,
+           agentConsole: "http://127.0.0.1:4173", explorer: "https://sepolia.basescan.org", pollMs: 5000, logChunk: 10000 },
 };
 // The agent's console listens on the machine that runs the agent, so a page on a public host has none
 if (!["localhost", "127.0.0.1"].includes(location.hostname)) for (const network of Object.values(NETWORKS)) network.agentConsole = null;
