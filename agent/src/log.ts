@@ -87,6 +87,9 @@ export type AgentEvent =
       nextAt: number;
     }
   | { kind: 'cycle.skipped'; cycle: number; reason: string; runningForMs: number }
+  // A source that failed `failures` times in a row is skipped until retryAt (milliseconds); recovered on its next success
+  | { kind: 'source.degraded'; source: string; failures: number; retryAt: number }
+  | { kind: 'source.recovered'; source: string }
   // The open triggers a restart picked up again from the vault
   | { kind: 'agent.recovered'; openTriggers: string[] }
   | {

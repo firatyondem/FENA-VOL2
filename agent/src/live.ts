@@ -9,6 +9,7 @@ import { ViemVault } from './chain/viem-vault.ts';
 import type { Classifier } from './classifier/types.ts';
 import { Budget, budgetedFetch, GuardedVault, PRICED_AIRNODES, readBudgetSettings } from './engine/budget.ts';
 import { CycleRunner } from './engine/cycle.ts';
+import { airnodeSourceOf, guardedClassifier, guardedFetch, SourceGuard } from './engine/sources.ts';
 import { SellKeeper } from './engine/keeper.ts';
 import { TriggerEngine } from './engine/trigger-engine.ts';
 import type { EventLog } from './log.ts';
@@ -64,8 +65,12 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
   if (!isAddress(vaultAddress)) throw new Error('VAULT_ADDRESS is not an address');
   const watchlist = loadWatchlist();
 
-  const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
-  const walletClient = createWalletClient({ chain, transport: http(rpcUrl), account });
+  // A source that keeps failing (an Airnode, the RPC, the classifier) is skipped for a while instead of hammered
+  const cycleIntervalSec = Number(process.env.CYCLE_INTERVAL_SEC || 30);
+  const sources = new SourceGuard({ log, cycleIntervalSec });
+  const rpcFetch = guardedFetch(fetch, sources, () => 'rpc');
+  const publicClient = createPublicClient({ chain, transport: http(rpcUrl, { fetchFn: rpcFetch }) });
+  const walletClient = createWalletClient({ chain, transport: http(rpcUrl, { fetchFn: rpcFetch }), account });
 
   // The agent's own money: the payer's aUSD for data and the agent wallet's ETH for gas, within daily budgets
   const payerKey = process.env.PAYER_PRIVATE_KEY;
@@ -73,7 +78,10 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
   const ausdClient =
     chain.id === baseSepolia.id
       ? publicClient
-      : createPublicClient({ chain: baseSepolia, transport: http(process.env.AUSD_RPC_URL || 'https://sepolia.base.org') });
+      : createPublicClient({
+          chain: baseSepolia,
+          transport: http(process.env.AUSD_RPC_URL || 'https://sepolia.base.org', { fetchFn: rpcFetch }),
+        });
   const budget = new Budget({
     settings: readBudgetSettings(),
     log,
@@ -91,7 +99,8 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
         )
       : fetch;
   const pricedUrls = PRICED_AIRNODES.flatMap((name) => profiles.airnodes[name]?.url ?? []);
-  const airnodeFetch = budgetedFetch(payingFetch, pricedUrls, budget);
+  // The budget refuses first, so a refused call costs nothing; then the source guard, then the payment
+  const airnodeFetch = budgetedFetch(guardedFetch(payingFetch, sources, airnodeSourceOf(profiles.airnodes)), pricedUrls, budget);
 
   // The users whose rule names this agent's wallet, read from the vault; every write passes the budget first
   const vault = new GuardedVault(
@@ -109,7 +118,6 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
 
   const twitter = profiles.airnodes.twitterapi;
   if (!twitter) throw new Error('shared/asset-profiles.json has no twitterapi Airnode');
-  const cycleIntervalSec = Number(process.env.CYCLE_INTERVAL_SEC || 30);
   const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC || 60);
   const p1IntervalSec = Number(process.env.P1_INTERVAL_SEC || 30);
   const now = () => Math.floor(Date.now() / 1000);
@@ -120,7 +128,7 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
   const engine = new TriggerEngine({
     profiles,
     vault,
-    classifier,
+    classifier: guardedClassifier(classifier, sources),
     log,
     now,
     tweetAirnode: twitter.address,
@@ -163,5 +171,5 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
     }
   }
   cycles.start();
-  return { now, fetchPrice, cycles, budget, stop: () => cycles.stop() };
+  return { now, fetchPrice, cycles, budget, sources, stop: () => cycles.stop() };
 };
