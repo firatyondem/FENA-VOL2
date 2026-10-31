@@ -76,6 +76,16 @@ export const transactionFields = (cost: TransactionCost | void) => ({
   ...(cost?.gasWei === undefined ? {} : { gasEth: formatEther(cost.gasWei) }),
 });
 
+// An open trigger as the vault stores it: what Gate 2 needs to pick it up again after a restart
+export interface OpenTriggerRecord {
+  triggerId: string;
+  ruleId: string;
+  asset: string;
+  // P0's price, with 18 decimals, and the time at which the source took it, in seconds
+  p0: bigint;
+  t0: number;
+}
+
 export type SellKind = 'manual' | 'take-profit' | 'stagnation' | 'stop-loss';
 
 export interface Position {
@@ -127,5 +137,7 @@ export interface VaultPort {
   confirmTrigger(triggerId: string, p1: SignedResponse): Promise<Bought>;
   expireTrigger(triggerId: string): Promise<Expired | void>;
   listPositions(): Promise<Position[]>;
+  // The open triggers of this agent's users, so a restart forgets none
+  listOpenTriggers?(): Promise<OpenTriggerRecord[]>;
   sell(positionId: string, kind: SellKind, price: SignedResponse): Promise<Sold>;
 }

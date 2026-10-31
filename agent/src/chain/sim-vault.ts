@@ -13,6 +13,7 @@ import {
   type Expired,
   type OpenedTrigger,
   type OpenTriggerInput,
+  type OpenTriggerRecord,
   type Position,
   type Rule,
   type RuleAsset,
@@ -211,7 +212,7 @@ export class SimVault implements VaultPort {
     if (rule.paused) throw new VaultRejection('RuleIsPaused');
     const asset = this.ruleAsset(rule, trigger.asset);
     const { price: p1, key } = await this.verifyPrice(rule.id, trigger.asset, p1Response);
-    const trend = checkTrend({ ...p1, price: trigger.p0, sourceTime: trigger.t0 }, p1, asset);
+    const trend = checkTrend({ price: trigger.p0, sourceTime: trigger.t0 }, p1, asset);
     if (!trend.ok) throw new VaultRejection(GATE_ERRORS[trend.reason]);
     // spend() throws before it changes anything, so nothing is recorded for a refused buy
     const usdcIn = this.spend(rule, asset);
@@ -231,6 +232,12 @@ export class SimVault implements VaultPort {
       open: true,
     });
     return { triggerId, positionId, usdcIn, assetOut, price: p1.price };
+  }
+
+  async listOpenTriggers(): Promise<OpenTriggerRecord[]> {
+    return [...this.triggers.values()]
+      .filter((trigger) => trigger.status === 'open')
+      .map(({ id, ruleId, asset, p0, t0 }) => ({ triggerId: id, ruleId, asset, p0, t0 }));
   }
 
   // Nothing is mined in memory, so there is no hash or gas to report

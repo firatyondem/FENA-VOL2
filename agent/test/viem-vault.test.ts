@@ -163,6 +163,57 @@ test('a mined transaction reports its gas: gasUsed times the effective gas price
   assert.deepEqual(await vault.expireTrigger('7'), { txHash: HASH, gasWei: 90_000_000_000_000n });
 });
 
+test("the open triggers of the agent's users come from TriggerOpened and each trigger's status", async () => {
+  const OTHER_USER: Address = '0x90F79bf6EB2c4f870365E785982E1f101E93b906';
+  const P0 = 2000n * 10n ** 18n;
+  const eth = assetIdOf('ETH');
+  const assetRule = {
+    thresholdBps: 300,
+    spikeCapBps: 1200,
+    minWait: 120,
+    maxWindow: 600,
+    cooldown: 60,
+    budgetShareBps: 10_000,
+    takeProfitBps: 800,
+    stagnationBandBps: 100,
+    stagnationDelay: 600,
+  };
+  const events: Record<string, unknown[]> = {
+    RuleSet: [
+      {
+        args: {
+          user: USER,
+          rule: { agent: USER, buyAmount: 1n, maxPerTrade: 1n, dailyLimit: 1n },
+          assetIds: [eth],
+          assetRules: [assetRule],
+          assetTopics: [''],
+          watchedAccounts: [],
+        },
+      },
+    ],
+    TriggerOpened: [
+      { args: { triggerId: 1n, user: USER, assetId: eth, tweetId: 9n, p0: P0, t0: 1000n } },
+      // Confirmed since
+      { args: { triggerId: 2n, user: USER, assetId: eth, tweetId: 9n, p0: P0, t0: 1000n } },
+      // Another agent's user
+      { args: { triggerId: 3n, user: OTHER_USER, assetId: eth, tweetId: 9n, p0: P0, t0: 1000n } },
+    ],
+  };
+  const statuses: Record<string, number> = { '1': 1, '2': 2, '3': 1 };
+  const vault = new ViemVault({
+    address: VAULT,
+    publicClient: {
+      getContractEvents: async ({ eventName }: { eventName: string }) => events[eventName] ?? [],
+      readContract: async ({ functionName, args }: { functionName: string; args: [bigint] }) =>
+        functionName === 'getTrigger' ? { status: statuses[args[0].toString()] } : false,
+    } as never,
+    walletClient: { account: { address: USER } } as never,
+    profiles: loadProfiles(),
+    watchlist: [],
+  });
+  assert.deepEqual(await vault.listOpenTriggers(), [{ triggerId: '1', ruleId: USER, asset: 'ETH', p0: P0, t0: 1000 }]);
+});
+
 test('names a revert that first shows up when the transaction is sent', async () => {
   // Like viem: the simulation passes and hands back a request whose ABI holds only the called function, and the send
   // decodes its revert with the ABI it was given

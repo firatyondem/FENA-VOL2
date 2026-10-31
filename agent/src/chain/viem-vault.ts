@@ -28,6 +28,7 @@ import {
   type Expired,
   type OpenedTrigger,
   type OpenTriggerInput,
+  type OpenTriggerRecord,
   type Position,
   type Rule,
   type SellKind,
@@ -49,6 +50,9 @@ export const toVaultResponse = ({ requestHash, timestamp, data, signature }: Sig
 });
 
 const SELL_REASONS: Partial<Record<SellKind, number>> = { manual: 0, 'take-profit': 1, stagnation: 2 };
+
+// IVault.TriggerStatus: None, Open, Confirmed, Expired
+const TRIGGER_OPEN = 1;
 
 // The custom error name when `error` is a revert, so the vault refused; undefined for anything else, such as an RPC that
 // did not answer, which says nothing about the request.
@@ -204,6 +208,23 @@ export class ViemVault implements VaultPort {
       position.open = onChain.isOpen;
     }
     return [...this.positions.values()];
+  }
+
+  // The triggers of this agent's users that are still open, from TriggerOpened and each trigger's status
+  async listOpenTriggers(): Promise<OpenTriggerRecord[]> {
+    const { publicClient, address, fromBlock = 0n } = this.options;
+    const users = new Set((await this.listRules()).map((rule) => rule.id.toLowerCase()));
+    const opened = await publicClient.getContractEvents({ address, abi: vaultAbi, eventName: 'TriggerOpened', fromBlock });
+    const open: OpenTriggerRecord[] = [];
+    for (const event of opened) {
+      const { triggerId, user, assetId, p0, t0 } = event.args;
+      if (triggerId === undefined || !user || !assetId || p0 === undefined || t0 === undefined) continue;
+      const asset = this.assetKey(assetId);
+      if (!asset || !users.has(user.toLowerCase())) continue;
+      const trigger = await publicClient.readContract({ address, abi: vaultAbi, functionName: 'getTrigger', args: [triggerId] });
+      if (trigger.status === TRIGGER_OPEN) open.push({ triggerId: triggerId.toString(), ruleId: user, asset, p0, t0: Number(t0) });
+    }
+    return open;
   }
 
   private async loadPosition(id: string, users?: Set<string>) {

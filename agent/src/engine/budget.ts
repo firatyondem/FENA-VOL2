@@ -246,6 +246,10 @@ export class GuardedVault implements VaultPort {
     return this.inner.listPositions();
   }
 
+  listOpenTriggers() {
+    return this.inner.listOpenTriggers?.() ?? Promise.resolve([]);
+  }
+
   private async write<T>(functionName: Parameters<Budget['assertWrite']>[0], send: () => Promise<T>): Promise<T> {
     this.budget.assertWrite(functionName);
     try {

@@ -135,6 +135,17 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
     cycleIntervalSec,
     pollIntervalSec,
   });
+  // Before the first cycle: the triggers a previous run left open go back on the Gate 2 list. A briefly unreachable RPC
+  // gets three tries; after that the agent runs anyway and says so.
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      engine.restorePending(await vault.listOpenTriggers(), await vault.listRules());
+      break;
+    } catch (error) {
+      log.append({ kind: 'error', where: `recovering open triggers, try ${attempt} of 3`, message: (error as Error).message });
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
   cycles.start();
   return { now, fetchPrice, cycles, budget, stop: () => cycles.stop() };
 };

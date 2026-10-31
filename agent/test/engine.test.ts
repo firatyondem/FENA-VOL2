@@ -92,7 +92,8 @@ const setup = ({
   });
   const log = new EventLog({ now: () => clock.now * 1000 });
   const classifier = new StubClassifier(answers);
-  const engine = new TriggerEngine({
+  // A new engine on the same vault, log and sources: what the agent is after a restart
+  const makeEngine = () => new TriggerEngine({
     profiles,
     vault,
     classifier,
@@ -108,10 +109,11 @@ const setup = ({
       return fixture(state.prices[asset] as string);
     },
   });
+  const engine = makeEngine();
   const kinds = () => log.recent().map((event) => event.kind);
   const last = <K extends LoggedEvent['kind']>(kind: K) =>
     log.recent().findLast((event) => event.kind === kind) as Extract<LoggedEvent, { kind: K }> | undefined;
-  return { clock, state, vault, log, engine, classifier, kinds, last };
+  return { clock, state, vault, log, engine, classifier, kinds, last, rule, restart: makeEngine };
 };
 
 test('a relevant post opens a trigger, waits for the window and buys at P1', async () => {
@@ -233,6 +235,57 @@ test('each transaction event carries its hash and the gas it cost the agent', as
   await engine.checkPending();
   assert.equal(last('trigger.expired')?.txHash, '0x02');
   assert.equal(last('trigger.expired')?.gasEth, '0.00005');
+});
+
+test('after a restart the open trigger is recovered from the vault and still buys', async () => {
+  const { clock, state, vault, engine, last, restart } = setup();
+  await engine.pollAccount(trump);
+  const triggerId = last('trigger.opened')?.triggerId as string;
+
+  // The process dies: a new engine knows nothing until it reads the vault
+  const restarted = restart();
+  assert.equal(restarted.pendingTriggers().length, 0);
+  assert.deepEqual(restarted.restorePending(await vault.listOpenTriggers(), await vault.listRules()), [triggerId]);
+  assert.deepEqual(last('agent.recovered')?.openTriggers, [triggerId]);
+  const [pending] = restarted.pendingTriggers();
+  assert.equal(pending?.p0.price, 2000n * 10n ** 18n);
+  assert.equal(pending?.asset, 'ETH');
+
+  clock.now = P0_TIME + 320;
+  state.prices.ETH = 'eth-p1-rise.json';
+  await restarted.checkPending();
+  assert.equal(last('trigger.bought')?.triggerId, triggerId);
+  assert.equal(restarted.pendingTriggers().length, 0);
+  // Restoring again finds nothing open
+  assert.deepEqual(restarted.restorePending(await vault.listOpenTriggers(), await vault.listRules()), []);
+});
+
+test('a trigger recovered after its window closed expires in the first cycle', async () => {
+  const { clock, vault, engine, last, restart } = setup();
+  await engine.pollAccount(trump);
+  const triggerId = last('trigger.opened')?.triggerId as string;
+  clock.now = P0_TIME + 700;
+  const restarted = restart();
+  restarted.restorePending(await vault.listOpenTriggers(), await vault.listRules());
+  await restarted.checkPending();
+  assert.equal(last('trigger.expired')?.triggerId, triggerId);
+  assert.equal((await vault.listOpenTriggers()).length, 0);
+});
+
+test('a recovered trigger whose asset left the rule gets no window, so Gate 2 expires it at once', async () => {
+  const { vault, engine, last, restart, rule } = setup();
+  await engine.pollAccount(trump);
+  const triggerId = last('trigger.opened')?.triggerId as string;
+  const restarted = restart();
+  const withoutEth = { ...rule, assets: rule.assets.filter((asset) => asset.asset !== 'ETH') };
+  restarted.restorePending(await vault.listOpenTriggers(), [withoutEth]);
+  assert.equal(restarted.pendingTriggers()[0]?.params.maxWindowSec, 0);
+  // Well inside the old window, the first Gate 2 pass already tries to expire it, as the vault would allow
+  const expiries: string[] = [];
+  vault.expireTrigger = async (id) => void expiries.push(id);
+  await restarted.checkPending();
+  assert.deepEqual(expiries, [triggerId]);
+  assert.equal(restarted.pendingTriggers().length, 0);
 });
 
 test('a spike above the cap is never submitted', async () => {

@@ -79,6 +79,8 @@ export type AgentEvent =
       nextAt: number;
     }
   | { kind: 'cycle.skipped'; cycle: number; reason: string; runningForMs: number }
+  // The open triggers a restart picked up again from the vault
+  | { kind: 'agent.recovered'; openTriggers: string[] }
   | {
       kind: 'budget.mode';
       mode: 'normal' | 'saving' | 'halted';
