@@ -63,6 +63,21 @@
     assetIdOf: symbol => ethers.keccak256(ethers.toUtf8Bytes(symbol)),
     // An X id is a Snowflake: its top bits are milliseconds since the X epoch
     tweetTimeMs: id => Number((BigInt(id) >> 22n) + X_EPOCH_MS),
+
+    // A signed response (as the agent serves it) to the vault's SignedResponse struct: the data goes as the exact UTF-8
+    // bytes the Airnode signed, the timestamp as a uint256
+    signedResponseToContract: r => ({
+      requestHash: r.requestHash,
+      timestamp: BigInt(r.timestamp),
+      data: ethers.hexlify(ethers.toUtf8Bytes(r.data)),
+      signature: r.signature,
+    }),
+    // The price inside a signed price response, for display only: the vault reads the signed bytes itself
+    signedPriceValue: r => {
+      const price = Number(JSON.parse(r.data).price);
+      if (!Number.isFinite(price) || price <= 0) throw new Error("The signed response holds no price");
+      return price;
+    },
   };
 
   // ---------- Rule mapping ----------

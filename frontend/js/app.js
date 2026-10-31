@@ -319,7 +319,8 @@ const px = a => isLive ? (live.state?.lastPrices[a]?.price ?? 100) : Mock.prices
 const priceLine = a => !isLive ? `${token(a)} is at ${fmtPrice(px(a))}`
   : live.state?.lastPrices[a] ? `${token(a)} was last verified at ${fmtPrice(px(a))}` : `At an example price of ${fmtPrice(px(a))}`;
 const vaultFor = () => vaultBalance();
-const sellEndpointReady = () => false;
+// Selling by hand needs a fresh signed price: the agent's console serves one (live mode, or the stage driver's price server)
+const sellEndpointReady = () => isLive && live.signedPrices === true;
 const ASSET_SLIDERS = [
   { key: "trend", name: "Minimum price rise", term: "trend threshold", show: v => `+${v}%`,
     range: a => [prof(a).trend, prof(a).trend * 4, 0.5],
@@ -935,6 +936,7 @@ function followAgentConsole() {
     if (event.kind === "post.classified") agentPosts.set(event.postId, { ...agentPosts.get(event.postId), verdicts: event.results });
   };
   fetch(`${base}/api/state`).then(r => r.json()).then(state => {
+    live.signedPrices = state.signedPrices === true;
     state.events.forEach(take);
     renderLiveFeeds();
     let opened = false;
@@ -1066,10 +1068,62 @@ const txLink = (label, hash) => {
   const url = Chain.explorerTx(hash);
   return `<div>${label}: ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(hash)}</a>` : esc(hash)}</div>`;
 };
+// Selling by hand in two steps: fetch a signed price and show it, then send the sale at that price. The state lives
+// outside the table, which redraws on every poll.
+const selling = { positionId: null, stage: null, quote: null, error: "" };
+function sellControlsLive(p) {
+  if (!p.open) return "";
+  const keeper = "Sold automatically by the keeper at take profit or after the stagnation delay";
+  if (!sellEndpointReady()) {
+    return `<div class="buttons" style="margin-top:14px"><button class="btn small" disabled title="${keeper}">Sell now</button></div>
+      <p class="muted small">${keeper}. Selling by hand needs a signed price from the agent's console, and it has none to give right now.</p>`;
+  }
+  const s = selling.positionId === p.id ? selling : {};
+  if (s.stage === "quoted" || s.stage === "sending") {
+    const value = p.qty * s.quote.price, sending = s.stage === "sending" ? "disabled" : "";
+    return `<div class="sell-quote">Signed price <b class="mono">${fmtPrice(s.quote.price)}</b>, signed at ${clock(s.quote.signedAt * 1000)}:
+      about ${fmt(value)} mUSDC back, ${fmtSigned(value - p.cost)} on what you invested.
+      <div class="buttons" style="margin-top:10px"><button class="btn small primary" data-sell-confirm="${p.id}" ${sending}>${sending ? "Confirm in your wallet…" : "Sell at this price"}</button>
+      <button class="btn small" data-sell-cancel="${p.id}" ${sending}>Cancel</button></div></div>`;
+  }
+  const fetching = s.stage === "fetching";
+  return `<div class="buttons" style="margin-top:14px"><button class="btn small primary" data-sell="${p.id}" ${fetching ? "disabled" : ""}>${fetching ? "Getting a signed price…" : "Sell now at a fresh signed price"}</button></div>
+    ${s.error ? `<div class="error">${esc(s.error)}</div>` : ""}`;
+}
+
+async function quoteSell(id) {
+  const p = positionsNow().find(x => x.id === id);
+  if (!p) return;
+  Object.assign(selling, { positionId: id, stage: "fetching", quote: null, error: "" });
+  renderInvestments();
+  try {
+    const res = await fetch(`${NETWORKS[Chain.chainId].agentConsole}/api/signed-price?asset=${encodeURIComponent(p.asset)}`);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `the agent's console answered ${res.status}`);
+    selling.quote = { response: body.response, price: Units.signedPriceValue(body.response), signedAt: Number(body.response.timestamp) };
+    selling.stage = "quoted";
+  } catch (err) {
+    Object.assign(selling, { stage: null, error: `Couldn't get a signed price: ${err.message}` });
+  }
+  renderInvestments();
+}
+
+async function confirmSell(id) {
+  selling.stage = "sending";
+  renderInvestments();
+  try {
+    await Chain.send("Sell", "vault", "sell", [BigInt(id), SELL_REASON.indexOf("Manual"), Units.signedResponseToContract(selling.quote.response)]);
+    Object.assign(selling, { positionId: null, stage: null, quote: null, error: "" });
+    await refreshLive();
+  } catch (err) {
+    Object.assign(selling, { stage: null, quote: null, error: `Sell refused: ${failText(err)}` });
+  }
+  renderInvestments();
+}
+
 function detailHtmlLive(p) {
   const t = p.live.trigger, profile = Chain.profiles[p.asset] || {};
-  const sell = p.open ? `<div class="buttons" style="margin-top:14px"><button class="btn small primary" data-sell="${p.id}"
-      ${sellEndpointReady() ? "" : 'disabled title="Sold automatically by the keeper at take profit or after the stagnation delay"'}>Sell now at a fresh signed price</button></div>` : "";
+  const sell = sellControlsLive(p);
   return `<tr class="detail"><td colspan="9">
     <p class="story">${storyOfLive(p)}</p>
     <ul class="steps">
@@ -1168,8 +1222,14 @@ function renderHistory() { renderGlance(); renderInvestments(); renderBlocked();
 for (const id of ["fAsset", "fOutcome", "fStatus"]) $(id).onchange = renderInvestments;
 $("tab-history").onclick = e => {
   const sell = e.target.closest("[data-sell]"), open = e.target.closest("[data-open]"), row = e.target.closest("tr.inv");
+  if (isLive && (sell || e.target.closest("[data-sell-confirm], [data-sell-cancel]"))) {
+    const step = e.target.closest("[data-sell-confirm], [data-sell-cancel]");
+    if (sell) quoteSell(+sell.dataset.sell);
+    else if (step.dataset.sellConfirm) confirmSell(+step.dataset.sellConfirm);
+    else { Object.assign(selling, { positionId: null, stage: null, quote: null, error: "" }); renderInvestments(); }
+    return;
+  }
   if (sell) {
-    if (isLive) return;
     if (!ask("Sell this investment at a fresh signed price?")) return;
     try {
       const p = Mock.sell(+sell.dataset.sell);

@@ -14,6 +14,17 @@ const deployment = shared("deployments/31337.json");
 const requestHashes = shared("deployments/request-hashes.json");
 const AGENT = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 
+test("a signed response goes to the vault exactly as the agent sends it", async () => {
+  const { toVaultResponse } = await import("../../agent/src/chain/viem-vault.ts");
+  for (const file of ["eth-p1-rise.json", "tweet-trump-venezuela.json"]) {
+    const response = shared(`fixtures/synthetic/${file}`);
+    assert.deepEqual(Units.signedResponseToContract(response), toVaultResponse(response), file);
+  }
+  assert.equal(Units.signedPriceValue(shared("fixtures/synthetic/eth-p1-rise.json")), 2070);
+  assert.equal(Units.signedPriceValue({ data: '{"price":"0.075845","updatedAt":1}' }), 0.075845, "a quoted price");
+  assert.throws(() => Units.signedPriceValue({ data: '{"price":null}' }), /no price/);
+});
+
 test("USDC amounts round-trip with 6 decimals and round down", () => {
   assert.equal(Units.usdcToUnits(2.3), 2_300_000n, "2.3 stays 2.3, not 2.2999");
   assert.equal(Units.usdcToUnits("0.1234567"), 123_456n, "floor, never up");

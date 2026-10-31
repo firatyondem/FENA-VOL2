@@ -267,3 +267,4 @@ footer ol { margin: 6px 0 0; padding-left: 18px; }
 a { color: var(--accent); text-underline-offset: 2px; }
 a.btn { color: var(--text); text-decoration: none; }
 .proof a { word-break: break-all; }
+.sell-quote { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--border-2); border-radius: 10px; background: var(--card-2); font-size: .9rem; }
