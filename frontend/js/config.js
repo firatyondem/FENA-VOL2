@@ -51,7 +51,7 @@ const NETWORKS = {
   31337: { name: "Anvil (local)", rpc: "http://127.0.0.1:8545", agent: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
            agentConsole: "http://127.0.0.1:4173", explorer: null, pollMs: 2000 },
   // logChunk: the public RPC answers getLogs for at most 200 blocks
-  84532: { name: "Base Sepolia", rpc: "https://sepolia.base.org", agent: "" /* set at go-live */,
+  84532: { name: "Base Sepolia", rpc: "https://sepolia.base.org", agent: "0x6fDA8cFC033C531f1D682655Ba4eF9038b7C80f8" /* set at go-live */,
            agentConsole: "http://127.0.0.1:4173", explorer: "https://sepolia.basescan.org", pollMs: 5000, logChunk: 200 },
 };
 // The agent's console listens on the machine that runs the agent, so a page on a public host has none
