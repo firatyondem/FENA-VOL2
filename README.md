@@ -52,6 +52,7 @@ http://localhost:8000/frontend/?mode=live&chain=84532 and pick "For judges: test
 | --- | --- |
 | Run the app against a real vault on a local chain, step by step | [frontend/README.md](frontend/README.md#rehearse-live-mode-on-anvil) |
 | Deploy to Base Sepolia and run the agent live | [agent/README.md](agent/README.md#deploy-and-go-live) |
+| Read who relies on the data and what forging it would do | [docs/write-up.md](docs/write-up.md) |
 | Read the contract spec | [docs/spec-person-a.md](docs/spec-person-a.md) |
 
 ## Layout

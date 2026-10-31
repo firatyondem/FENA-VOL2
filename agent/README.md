@@ -81,7 +81,7 @@ assets, limits, watched accounts and topics. It finds open positions from `Trigg
 
 ## Still open
 
-- One paid call per account and per TickerLayer asset (needs `PAYER_PRIVATE_KEY` with aUSD) to confirm the handles and
-  pinned-tweet flags in `config/watchlist.json` and the unit of TickerLayer's `lastTrade.timestamp` (assumed ms);
-  `npm run fetch-prices -- OIL TSLA --save` keeps the responses.
+- One paid call per account and per TSLA (needs `PAYER_PRIVATE_KEY` with aUSD) to confirm the handles and pinned-tweet
+  flags in `config/watchlist.json` and that TSLA's `lastTrade.timestamp` is in ms, as a saved OIL response is;
+  `npm run fetch-prices -- TSLA --save` keeps the response.
 - The deployed vault has no stop loss; the keeper only offers take profit and the stagnation exit on-chain.
