@@ -1,6 +1,6 @@
 // ===== UI logic =====
-// Everything the page does lives here. It talks to `Mock` (practice mode) for now;
-// once the contract is deployed, swap the Mock.* calls for contract calls (marked TODO).
+// Everything the page does lives here. Practice mode talks to `Mock` (js/mock.js); live mode talks to the deployed
+// vault through `Chain` (js/chain.js), and every value crosses over through `Units` (js/units.js).
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -618,7 +618,7 @@ $("saveRuleBtn").onclick = () => {
   if (!ask("Save this rule on-chain?")) return;
   const perAsset = {};
   for (const a of draft.assets) perAsset[a] = Object.fromEntries(ASSET_SLIDERS.map(s => [s.key, draft.perAsset[a][s.key].value]));
-  Mock.setRule({ // TODO: contract.setRule(...) once deployed
+  Mock.setRule({ // practice; live mode saves through saveRuleLive()
     assets: [...draft.assets],
     accounts: [...draft.accounts],
     // The AI judges meaning itself; it only gets the standard topic list per asset as a hint
@@ -694,7 +694,7 @@ function moneyAction(kind) {
   error.textContent = "";
   if (amount > 0 && !ask(`${kind === "deposit" ? "Deposit" : "Withdraw"} ${fmt(amount)} mUSDC?`)) return;
   try {
-    kind === "deposit" ? Mock.deposit(amount) : Mock.withdraw(amount); // TODO: contract calls once deployed
+    kind === "deposit" ? Mock.deposit(amount) : Mock.withdraw(amount); // practice; live mode uses moneyActionLive()
     input.value = "";
     if (kind === "deposit") activityHint = null;
   } catch (err) { error.textContent = reasonText(err); }
@@ -1252,7 +1252,7 @@ function showResponse(r, kind) {
 function submitResponse(r, label) {
   let html;
   try {
-    const price = Mock.verify(r); // TODO: contract call once deployed
+    const price = Mock.verify(r); // the practice model, in both modes; live mode labels this tab a simulation
     html = `<span class="badge ok">accepted</span> ${esc(label)}: the verified ETH/USD price ${fmtPrice(price)} was used.`;
   } catch (err) {
     html = `<span class="badge bad">blocked</span> ${esc(label)}: ${esc(reasonText(err))}.`;
