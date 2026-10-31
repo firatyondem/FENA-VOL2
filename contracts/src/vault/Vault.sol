@@ -334,6 +334,18 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
         return _positions[positionId];
     }
 
+    /// @notice The checks every price must pass before a buy or a sell, open to anyone at any time: reverts with the
+    /// vault's reason, or returns the price and when the source took it. Nothing moves and the response stays unused.
+    /// @dev Declared here and not in IVault, which stays frozen. It runs the same _readPrice as confirmTrigger and sell.
+    /// A buy's replay guard is per user, so it is not part of this check.
+    function checkPrice(bytes32 assetId, SignedResponse calldata response)
+        external
+        view
+        returns (uint256 price, uint256 priceTime)
+    {
+        return _readPrice(assetId, response);
+    }
+
     // ---------------------------------------------------------------------------------------------------------------
     // Checks
     // ---------------------------------------------------------------------------------------------------------------
