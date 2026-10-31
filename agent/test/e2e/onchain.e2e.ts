@@ -22,7 +22,7 @@ import { foundry } from 'viem/chains';
 import { applyRule, type RuleConfig } from '../../src/chain/setup.ts';
 import { vaultAbi } from '../../src/chain/vault-abi.ts';
 import { VaultRejection } from '../../src/chain/vault.ts';
-import { ViemVault } from '../../src/chain/viem-vault.ts';
+import { checkPrice, ViemVault } from '../../src/chain/viem-vault.ts';
 import type { Candidate, Classification, Classifier } from '../../src/classifier/types.ts';
 import { SellKeeper } from '../../src/engine/keeper.ts';
 import { TriggerEngine } from '../../src/engine/trigger-engine.ts';
@@ -207,6 +207,25 @@ test('the four tamper tests revert on the real vault', { skip: toolsMissing }, a
     );
   }
   assert.equal(await readVault('balanceOf', user), usdc(10_000), 'no funds moved');
+});
+
+test('checkPrice gives judges the same answers from the real vault, with no wallet', { skip: toolsMissing }, async () => {
+  const valid = await signedPrice('ETH', '2070', clock.now);
+  const { price } = await checkPrice(publicClient, deployment.vault, 'ETH', valid);
+  assert.equal(price, parseUnits('2070', 18));
+  const forgeries: [typeof valid, string][] = [
+    [{ ...valid, data: valid.data.replace('"price":2070', '"price":2170') }, 'NotSignedByAirnode'],
+    [await signedPrice('ETH', '2070', clock.now - 400), 'ResponseTooOld'],
+    [await signedPrice('ETH', '2070', clock.now, FIXTURE_AIRNODE_KEY, 'BTC'), 'WrongRequestHash'],
+    [await signedPrice('ETH', '2070', clock.now, ATTACKER_KEY), 'NotSignedByAirnode'],
+  ];
+  for (const [forgery, reason] of forgeries) {
+    await assert.rejects(
+      checkPrice(publicClient, deployment.vault, 'ETH', forgery),
+      (error) => error instanceof VaultRejection && error.reason === reason,
+      reason
+    );
+  }
 });
 
 test('Gate 2 refuses a weak trend and a spike on-chain', { skip: toolsMissing }, async () => {

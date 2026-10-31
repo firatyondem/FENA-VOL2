@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { AttestationError, type SignedResponse, verifySignedResponse } from '../src/airnode/attestation.ts';
 import { loadProfiles } from '../src/profiles.ts';
 import { buildRequestHashes } from '../scripts/request-hashes.ts';
-import { buildTamperSet } from '../scripts/tamper-set.ts';
+import { buildJudgeSet, buildTamperSet, fetchJudgeSet } from '../scripts/tamper-set.ts';
 import { NODARY_ADDRESS, readFixture, readSharedJson } from './helpers.ts';
 
 const profiles = loadProfiles();
@@ -43,4 +43,26 @@ test('the live tamper set fails the checks the spec names, on real Nodary data',
     ['Wrong signer', 'wrong-signer'],
   ]);
   assert.match(cases[0]?.response.data ?? '', /"price":4489.39/);
+});
+
+test('the judges start from the real response, unchanged, and then get its four forgeries', async () => {
+  const cases = await buildJudgeSet(eth, btc, eth);
+  assert.deepEqual(
+    cases.map(({ name, expected }) => [name, expected]),
+    [
+      ['Real, fresh response', 'accepted'],
+      ['Edited value', 'NotSignedByAirnode'],
+      ['Stale response', 'ResponseTooOld'],
+      ['Different request', 'WrongRequestHash'],
+      ['Wrong signer', 'NotSignedByAirnode'],
+    ]
+  );
+  assert.equal(cases[0]?.response, eth);
+  const fetched: string[] = [];
+  const set = await fetchJudgeSet(async (asset) => {
+    fetched.push(asset);
+    return asset === 'ETH' ? eth : btc;
+  });
+  assert.deepEqual(fetched, ['ETH', 'BTC']);
+  assert.equal(set.length, 5);
 });

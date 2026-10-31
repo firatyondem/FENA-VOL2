@@ -41,7 +41,10 @@ if (mode === 'replay') {
   const live = await startLive({ profiles, log, classifier });
   // The frontend's manual sell takes its signed price from the same source as the keeper
   const prices = { assets: Object.keys(profiles.assets), fetch: live.fetchPrice };
-  await startConsoleServer({ log, now: live.now, port, allowedOrigins, prices });
+  // The judges' tamper test takes its fresh responses from the same source and the same cache
+  const { fetchJudgeSet } = await import('../scripts/tamper-set.ts');
+  const tamper = { assets: ['ETH'], build: (_asset: string, priceOf: typeof live.fetchPrice) => fetchJudgeSet(priceOf) };
+  await startConsoleServer({ log, now: live.now, port, allowedOrigins, prices, tamper });
 } else {
   throw new Error(`AGENT_MODE must be replay or live, not ${mode}`);
 }
