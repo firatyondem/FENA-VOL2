@@ -14,6 +14,8 @@ export type AgentEvent =
       accounts: string[];
       // How often the supervisor restarted the agent before this start
       restarts?: number;
+      // The intervals and limits this run ran with (live mode)
+      settings?: Record<string, string | number>;
     }
   | { kind: 'post.seen'; account: string; postId: string; text: string; createdAt: number }
   | { kind: 'post.skipped'; account: string; postId: string; reason: string }

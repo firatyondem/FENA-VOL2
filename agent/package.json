@@ -21,6 +21,7 @@
     "test:e2e": "node --test test/e2e/*.e2e.ts",
     "set-rule": "node --env-file-if-exists=.env scripts/set-rule.ts",
     "wallets": "node --env-file-if-exists=.env scripts/wallets.ts",
+    "run-report": "node scripts/run-report.ts",
     "local-stage": "node scripts/local-stage.ts"
   },
   "dependencies": {

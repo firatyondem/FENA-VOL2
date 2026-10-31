@@ -1,10 +1,16 @@
 // Live mode: real accounts through the TwitterAPI.io Airnode, real signed prices, the deployed vault on Base Sepolia (or
 // a local anvil). Keys come from agent/.env and never leave this process.
 import { readFileSync } from 'node:fs';
-import { type Address, createPublicClient, createWalletClient, type Hex, http, isAddress, isHex } from 'viem';
+import { type Address, createPublicClient, createWalletClient, formatEther, formatUnits, type Hex, http, isAddress, isHex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { baseSepolia, foundry } from 'viem/chains';
-import { createPayingFetch, fetchSignedResponse, readAusdBalance, withSettlementReporting } from './airnode/client.ts';
+import {
+  AUSD_DECIMALS,
+  createPayingFetch,
+  fetchSignedResponse,
+  readAusdBalance,
+  withSettlementReporting,
+} from './airnode/client.ts';
 import { ViemVault } from './chain/viem-vault.ts';
 import type { Classifier } from './classifier/types.ts';
 import { Budget, budgetedFetch, GuardedVault, PRICED_AIRNODES, readBudgetSettings } from './engine/budget.ts';
@@ -83,8 +89,9 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
           chain: baseSepolia,
           transport: http(process.env.AUSD_RPC_URL || 'https://sepolia.base.org', { fetchFn: rpcFetch }),
         });
+  const budgetSettings = readBudgetSettings();
   const budget = new Budget({
-    settings: readBudgetSettings(),
+    settings: budgetSettings,
     log,
     trackAusd: Boolean(payer),
     readBalances: async () => ({
@@ -146,6 +153,23 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
     classifier: classifier.name,
     accounts: watchlist.map((watched) => watched.handle),
     restarts: Number(process.env.AGENT_RESTARTS || 0),
+    // What this run ran with, for the run report. The RPC's host only: a provider URL carries its API key.
+    settings: {
+      chainId: chain.id,
+      rpcHost: new URL(rpcUrl).host,
+      cycleIntervalSec,
+      pollIntervalSec,
+      p1IntervalSec,
+      txTimeoutMs: Number(process.env.TX_TIMEOUT_MS || 90_000),
+      ausdBudgetPerDay: formatUnits(budgetSettings.ausdPerDay, AUSD_DECIMALS),
+      ethBudgetPerDay: formatEther(budgetSettings.ethPerDay),
+      minEth: formatEther(budgetSettings.minEth),
+      minAusd: formatUnits(budgetSettings.minAusd, AUSD_DECIMALS),
+      maxTxPerHour: budgetSettings.maxTxPerHour,
+      savingAtPct: budgetSettings.savingAtPct,
+      payer: payer ?? 'none',
+      agent: account.address,
+    },
   });
 
   // One cycle every CYCLE_INTERVAL_SEC: health, rules, Gate 2, keeper, then Gate 1 when a poll is due
