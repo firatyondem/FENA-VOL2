@@ -19,6 +19,7 @@
     "export-abi": "node scripts/export-abi.ts",
     "test:e2e": "node --test test/e2e/*.e2e.ts",
     "set-rule": "node --env-file-if-exists=.env scripts/set-rule.ts",
+    "wallets": "node --env-file-if-exists=.env scripts/wallets.ts",
     "local-stage": "node scripts/local-stage.ts"
   },
   "dependencies": {

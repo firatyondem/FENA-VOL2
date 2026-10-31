@@ -11,7 +11,8 @@ import { SellKeeper } from './engine/keeper.ts';
 import { TriggerEngine } from './engine/trigger-engine.ts';
 import type { EventLog } from './log.ts';
 import { getAsset, priceAirnode, priceRequest, type Profiles } from './profiles.ts';
-import { latestTweetRequest, type WatchedAccount } from './sources/twitter.ts';
+import { latestTweetRequest } from './sources/twitter.ts';
+import { loadWatchlist } from './sources/watchlist.ts';
 
 const readJson = <T>(url: URL): T => JSON.parse(readFileSync(url, 'utf8')) as T;
 
@@ -44,11 +45,7 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
   );
   const vaultAddress = process.env.VAULT_ADDRESS ?? deployment.vault;
   if (!isAddress(vaultAddress)) throw new Error('VAULT_ADDRESS is not an address');
-  const watchlist = readJson<WatchedAccount[]>(new URL('../config/watchlist.json', import.meta.url));
-  if (process.env.DEMO_X_HANDLE) {
-    // Our own account for the live stage post, linked like Trump's (spec: our demo account)
-    watchlist.push({ handle: process.env.DEMO_X_HANDLE, label: 'Demo account', assets: ['OIL', 'BTC', 'ETH'], pinned: false });
-  }
+  const watchlist = loadWatchlist();
 
   const payerKey = process.env.PAYER_PRIVATE_KEY;
   const airnodeFetch: typeof fetch =

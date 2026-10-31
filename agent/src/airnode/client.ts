@@ -12,6 +12,10 @@ export const BASE_SEPOLIA = 'eip155:84532';
 // AirnodeHub USD (aUSD), the only asset the Airnodes accept, from the hackathon faucet. It has 6 decimals.
 export const AUSD_ADDRESS = '0xbeA34973e5f67F18F656A2C6070C64326C791808';
 
+// aUSD has 6 decimals; a tweet costs 0.01 aUSD
+export const AUSD_DECIMALS = 6;
+export const TWEET_PRICE_AUSD = 10_000n;
+
 // A tweet costs 0.01 aUSD and a TickerLayer price 0.05, so one dollar a call is a generous ceiling.
 const MAX_USD_PER_PAYMENT = '$1';
 const MAX_AUSD_PER_PAYMENT = '1000000';
