@@ -30,6 +30,20 @@ const requireKey = (name: string): Hex => {
   return value;
 };
 
+// Unattended, a failure nobody caught must not leave a half-dead process behind: log it (the log writes synchronously, so
+// it is on disk) and exit with code 1, so the supervisor restarts the agent.
+export const installCrashHandlers = (log: EventLog) => {
+  const crash = (where: string) => (error: unknown) => {
+    try {
+      log.append({ kind: 'error', where, message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      process.exit(1);
+    }
+  };
+  process.on('unhandledRejection', crash('unhandled rejection, exiting'));
+  process.on('uncaughtException', crash('uncaught exception, exiting'));
+};
+
 export interface LiveOptions {
   profiles: Profiles;
   log: EventLog;
@@ -37,6 +51,7 @@ export interface LiveOptions {
 }
 
 export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
+  installCrashHandlers(log);
   const rpcUrl = requireEnv('RPC_URL');
   const chain = Number(process.env.CHAIN_ID ?? baseSepolia.id) === foundry.id ? foundry : baseSepolia;
   const account = privateKeyToAccount(requireKey('AGENT_PRIVATE_KEY'));
@@ -121,6 +136,7 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
     vault: `${vaultAddress} on ${chain.name}`,
     classifier: classifier.name,
     accounts: watchlist.map((watched) => watched.handle),
+    restarts: Number(process.env.AGENT_RESTARTS || 0),
   });
 
   // One cycle every CYCLE_INTERVAL_SEC: health, rules, Gate 2, keeper, then Gate 1 when a poll is due

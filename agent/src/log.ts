@@ -6,7 +6,15 @@ import { fileURLToPath } from 'node:url';
 import type { Classification } from './classifier/types.ts';
 
 export type AgentEvent =
-  | { kind: 'agent.started'; mode: string; vault: string; classifier: string; accounts: string[] }
+  | {
+      kind: 'agent.started';
+      mode: string;
+      vault: string;
+      classifier: string;
+      accounts: string[];
+      // How often the supervisor restarted the agent before this start
+      restarts?: number;
+    }
   | { kind: 'post.seen'; account: string; postId: string; text: string; createdAt: number }
   | { kind: 'post.skipped'; account: string; postId: string; reason: string }
   | { kind: 'post.classified'; account: string; postId: string; classifier: string; results: Classification[] }

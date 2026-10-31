@@ -10,6 +10,7 @@
   },
   "scripts": {
     "start": "node --env-file-if-exists=.env src/main.ts",
+    "live:supervised": "node scripts/supervise.ts",
     "test": "node --test \"test/**/*.test.ts\"",
     "typecheck": "tsc",
     "request-hashes": "node scripts/request-hashes.ts",
