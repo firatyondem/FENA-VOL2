@@ -203,6 +203,7 @@ test("the open triggers of the agent's users come from TriggerOpened and each tr
   const vault = new ViemVault({
     address: VAULT,
     publicClient: {
+      getBlockNumber: async () => 100n,
       getContractEvents: async ({ eventName }: { eventName: string }) => events[eventName] ?? [],
       readContract: async ({ functionName, args }: { functionName: string; args: [bigint] }) =>
         functionName === 'getTrigger' ? { status: statuses[args[0].toString()] } : false,
@@ -212,6 +213,101 @@ test("the open triggers of the agent's users come from TriggerOpened and each tr
     watchlist: [],
   });
   assert.deepEqual(await vault.listOpenTriggers(), [{ triggerId: '1', ruleId: USER, asset: 'ETH', p0: P0, t0: 1000 }]);
+});
+
+// A chain whose RuleSet logs the vault scans: it records each getLogs range and can fail the call with a given number
+const scanningChain = () => {
+  const chain = {
+    head: 4_500n,
+    logs: [] as { eventName: string; blockNumber: bigint; args: unknown }[],
+    ranges: [] as [string, bigint, bigint][],
+    failures: new Map<number, Error>(),
+    headReads: [] as unknown[],
+  };
+  const ruleSet = (blockNumber: bigint, buyAmount: bigint) =>
+    chain.logs.push({
+      eventName: 'RuleSet',
+      blockNumber,
+      args: {
+        user: USER,
+        rule: { agent: USER, buyAmount, maxPerTrade: buyAmount, dailyLimit: buyAmount },
+        assetIds: [],
+        assetRules: [],
+        assetTopics: [],
+        watchedAccounts: [],
+      },
+    });
+  const vault = new ViemVault({
+    address: VAULT,
+    publicClient: {
+      getBlockNumber: async (parameters: unknown) => {
+        chain.headReads.push(parameters);
+        return chain.head;
+      },
+      getContractEvents: async ({ eventName, fromBlock, toBlock }: { eventName: string; fromBlock: bigint; toBlock: bigint }) => {
+        chain.ranges.push([eventName, fromBlock, toBlock]);
+        const failure = chain.failures.get(chain.ranges.length);
+        if (failure) throw failure;
+        return chain.logs.filter((log) => log.eventName === eventName && log.blockNumber >= fromBlock && log.blockNumber <= toBlock);
+      },
+      readContract: async () => false,
+    } as never,
+    walletClient: { account: { address: USER } } as never,
+    profiles: loadProfiles(),
+    watchlist: [],
+    fromBlock: 1_000n,
+    cacheSec: 0,
+  });
+  return { chain, ruleSet, vault };
+};
+
+test('event reads are incremental: 2,000-block chunks from the deployment, then only the new blocks', async () => {
+  const { chain, ruleSet, vault } = scanningChain();
+  ruleSet(1_500n, 50n);
+  assert.equal((await vault.listRules())[0]?.buyAmount, 50n);
+  assert.deepEqual(chain.ranges, [
+    ['RuleSet', 1_000n, 2_999n],
+    ['RuleSet', 3_000n, 4_500n],
+  ]);
+
+  // The user changes the rule; the next read fetches only the blocks since the last one, and the latest RuleSet wins
+  chain.head = 4_700n;
+  ruleSet(4_600n, 80n);
+  assert.equal((await vault.listRules())[0]?.buyAmount, 80n);
+  assert.deepEqual(chain.ranges.slice(2), [['RuleSet', 4_501n, 4_700n]]);
+
+  // No new block, no getLogs call
+  await vault.listRules();
+  assert.equal(chain.ranges.length, 3);
+  // Each scan asks for the head without viem's cache, so a log mined a moment ago is never missed
+  assert.deepEqual(chain.headReads, [{ cacheTime: 0 }, { cacheTime: 0 }, { cacheTime: 0 }]);
+});
+
+test('a provider that refuses the range gets half as many blocks, and the scan goes on', async () => {
+  const { chain, ruleSet, vault } = scanningChain();
+  chain.head = 3_000n;
+  ruleSet(2_500n, 50n);
+  chain.failures.set(1, new Error('query exceeds max block range 2000'));
+  assert.equal((await vault.listRules())[0]?.buyAmount, 50n);
+  assert.deepEqual(chain.ranges, [
+    ['RuleSet', 1_000n, 2_999n],
+    ['RuleSet', 1_000n, 1_999n],
+    ['RuleSet', 2_000n, 2_999n],
+    ['RuleSet', 3_000n, 3_000n],
+  ]);
+});
+
+test('an RPC failure mid-scan passes through, and the next read resumes after the last good chunk', async () => {
+  const { chain, ruleSet, vault } = scanningChain();
+  ruleSet(3_500n, 50n);
+  chain.failures.set(2, new Error('fetch failed'));
+  await assert.rejects(vault.listRules(), /fetch failed/);
+  assert.equal((await vault.listRules())[0]?.buyAmount, 50n);
+  assert.deepEqual(chain.ranges, [
+    ['RuleSet', 1_000n, 2_999n],
+    ['RuleSet', 3_000n, 4_500n],
+    ['RuleSet', 3_000n, 4_500n],
+  ]);
 });
 
 test('names a revert that first shows up when the transaction is sent', async () => {
