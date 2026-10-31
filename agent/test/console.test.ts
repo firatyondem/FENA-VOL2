@@ -4,11 +4,14 @@ import { test } from 'node:test';
 import { startConsoleServer } from '../src/console/server.ts';
 import { EventLog } from '../src/log.ts';
 // @ts-expect-error The view model is plain browser JavaScript without type declarations
-import { buildView, formatBps, shortAmount, trackPosition } from '../src/console/public/view-model.js';
+import { buildEngineRoom, buildView, cycleTone, formatBps, shortAmount, trackPosition } from '../src/console/public/view-model.js';
 
-const withServer = async (run: (base: string, log: EventLog) => Promise<void>) => {
+const withServer = async (
+  run: (base: string, log: EventLog) => Promise<void>,
+  options: { status?: () => unknown } = {}
+) => {
   const log = new EventLog({ now: () => 1_000 });
-  const server = await startConsoleServer({ log, now: () => 1_793_380_950, port: 0, clockIntervalMs: 20 });
+  const server = await startConsoleServer({ log, now: () => 1_793_380_950, port: 0, clockIntervalMs: 20, ...options });
   const { port } = server.address() as AddressInfo;
   try {
     await run(`http://127.0.0.1:${port}`, log);
@@ -231,4 +234,207 @@ test('view helpers place times on the track and format moves', () => {
   assert.equal(shortAmount('7.002801120448179271'), '7.0028');
   assert.equal(shortAmount('500'), '500');
   assert.equal(shortAmount('2.10000'), '2.1');
+  assert.equal(shortAmount('0.000123456', 6), '0.000123');
+});
+
+test('/api/state and each clock tick carry the live status; the replay sends none', async () => {
+  let ticks = 0;
+  const status = () => ({ mode: 'normal', ticks: ++ticks });
+  await withServer(
+    async (base) => {
+      const state = (await (await fetch(`${base}/api/state`)).json()) as { status: { mode: string } };
+      assert.equal(state.status.mode, 'normal');
+      const controller = new AbortController();
+      const response = await fetch(`${base}/api/stream`, { signal: controller.signal });
+      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+      let text = '';
+      while (!text.includes('event: clock')) text += new TextDecoder().decode((await reader.read()).value);
+      controller.abort();
+      assert.match(text, /event: clock\ndata: \{"now":1793380950,"status":\{"mode":"normal","ticks":\d+\}\}/);
+    },
+    { status }
+  );
+  await withServer(async (base) => {
+    const state = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
+    assert.equal('status' in state, false);
+  });
+});
+
+test('/api/state sends at most the newest 1,000 events', async () => {
+  await withServer(async (base, log) => {
+    for (let index = 0; index < 1_005; index += 1) log.append({ kind: 'payment.settled', transaction: `0x${index}` });
+    const state = (await (await fetch(`${base}/api/state`)).json()) as { events: { seq: number }[] };
+    assert.equal(state.events.length, 1_000);
+    assert.equal(state.events[0]?.seq, 6);
+  });
+});
+
+// A live status as buildStatus writes it
+const liveStatus = (overrides: Record<string, unknown> = {}) => ({
+  generatedAt: 1_793_400_100_000,
+  startedAt: 1_793_400_000_000,
+  uptimeSec: 100,
+  restarts: 1,
+  mode: 'saving',
+  modeReason: 'aUSD budget at 80% or more (2.4 aUSD of 3 aUSD)',
+  schedule: {
+    cycleIntervalSec: 30,
+    pollIntervalSec: 60,
+    cyclesRun: 3,
+    cyclesSkipped: 1,
+    running: false,
+    lastCycle: 4,
+    lastFinishedAt: 1_793_400_088_000,
+    lastCycleAgeSec: 12 as number | null,
+    nextAt: 1_793_400_120_000,
+  },
+  watchSet: ['demo'],
+  wallets: {
+    agent: {
+      address: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+      link: 'https://sepolia.basescan.org/address/0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+      eth: '0.0123456789',
+    },
+    payer: {
+      address: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
+      link: 'https://sepolia.basescan.org/address/0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
+      ausd: '0.6',
+    } as Record<string, string> | null,
+  },
+  budget: {
+    ausd: { tracked: true, spentToday: '2.4', limit: '3', min: '0.2' },
+    eth: { spentToday: '0.0001', limit: '0.005', min: '0.0005' },
+    txLastHour: 3,
+    maxTxPerHour: 30,
+    savingAtPct: 80,
+  },
+  totals: {
+    cycles: 3,
+    skipped: 1,
+    posts: 2,
+    triggers: 1,
+    p1Checks: 2,
+    buys: 1,
+    sells: 0,
+    rejected: 1,
+    expired: 0,
+    paidCalls: 4,
+    txSent: 2,
+    errors: 1,
+    ausdSpent: '0.04',
+    ethSpent: '0.000123',
+  },
+  sources: {},
+  ...overrides,
+});
+
+const cycle = (fields: Record<string, unknown>) => ({
+  kind: 'cycle.finished',
+  cycle: 1,
+  startedAt: 1_793_400_000_000,
+  durationMs: 1_200,
+  mode: 'normal',
+  polled: false,
+  accountsPolled: [],
+  postsNew: 0,
+  classified: 0,
+  triggersOpened: 0,
+  p1Checks: 0,
+  bought: 0,
+  rejected: 0,
+  expired: 0,
+  sold: 0,
+  paidCalls: 0,
+  txSent: 0,
+  ausdSpent: '0',
+  ethSpent: '0',
+  errors: 0,
+  nextAt: 0,
+  ...fields,
+});
+
+test('the Engine Room shows the heartbeat, the mode, both wallets, the budgets and the totals', () => {
+  const room = buildEngineRoom(liveStatus(), []);
+  assert.deepEqual(room.heartbeat, { text: 'Last cycle 12 s ago', stale: false });
+  assert.deepEqual(room.mode, { mode: 'saving', reason: 'aUSD budget at 80% or more (2.4 aUSD of 3 aUSD)' });
+  assert.match(room.schedule, /^One cycle every 30 s · posts polled every 60 s · watching @demo · next cycle \d\d:\d\d:\d\d UTC$/);
+  assert.deepEqual(
+    room.wallets.map((wallet: { role: string; short: string; balance: string }) => [wallet.role, wallet.short, wallet.balance]),
+    [
+      ['Agent wallet', '0x7099…79C8', '0.012345 ETH'],
+      ['Payer wallet', '0x3C44…93BC', '0.6 aUSD'],
+    ]
+  );
+  assert.deepEqual(
+    room.budgets.map((budget: { label: string; text: string; pct: number; tone: string }) => [
+      budget.label,
+      budget.text,
+      budget.pct,
+      budget.tone,
+    ]),
+    [
+      ['Data', '2.4 of 3 aUSD today', 80, 'amber'],
+      ['Gas', '0.0001 of 0.005 ETH today', 2, 'ok'],
+      ['Transactions', '3 of 30 in the last hour', 10, 'ok'],
+    ]
+  );
+  assert.deepEqual(room.totals, [
+    ['Cycles', 3],
+    ['Posts', 2],
+    ['Triggers', 1],
+    ['Buys', 1],
+    ['Sells', 0],
+    ['aUSD', '0.04'],
+    ['ETH', '0.000123'],
+    ['Errors recovered', 1],
+    ['Restarts', 1],
+  ]);
+  // The replay has no status, so no Engine Room
+  assert.equal(buildEngineRoom(undefined, []), undefined);
+});
+
+test('the heartbeat turns red after three missed cycles', () => {
+  const late = liveStatus({ schedule: { ...liveStatus().schedule, lastCycleAgeSec: 91 } });
+  assert.deepEqual(buildEngineRoom(late, []).heartbeat, { text: 'Last cycle 91 s ago', stale: true });
+  const never = liveStatus({ uptimeSec: 120, schedule: { ...liveStatus().schedule, lastCycleAgeSec: null } });
+  assert.deepEqual(buildEngineRoom(never, []).heartbeat, { text: 'No cycle yet', stale: true });
+});
+
+test('without a payer the data budget and the aUSD card are left out', () => {
+  const status = liveStatus();
+  const freeData = liveStatus({
+    wallets: { ...status.wallets, payer: null },
+    budget: { ...status.budget, ausd: { ...status.budget.ausd, tracked: false } },
+  });
+  const room = buildEngineRoom(freeData, []);
+  assert.deepEqual(
+    room.wallets.map((wallet: { role: string }) => wallet.role),
+    ['Agent wallet']
+  );
+  assert.deepEqual(
+    room.budgets.map((budget: { label: string }) => budget.label),
+    ['Gas', 'Transactions']
+  );
+});
+
+test('the cycle strip colours the last 60 cycles by what they did', () => {
+  assert.equal(cycleTone(cycle({})), 'grey');
+  assert.equal(cycleTone(cycle({ polled: true })), 'blue');
+  assert.equal(cycleTone(cycle({ polled: true, rejected: 1 })), 'amber');
+  assert.equal(cycleTone(cycle({ rejected: 1, bought: 1 })), 'green');
+  assert.equal(cycleTone(cycle({ sold: 1 })), 'green');
+  assert.equal(cycleTone(cycle({ bought: 1, errors: 1 })), 'red');
+  assert.equal(cycleTone({ kind: 'cycle.skipped', cycle: 2, reason: 'previous cycle still running', runningForMs: 31_000 }), 'red');
+
+  const events = [
+    { kind: 'post.seen' },
+    ...Array.from({ length: 70 }, (_, index) => cycle({ cycle: index + 1, polled: index % 2 === 0 })),
+    { kind: 'cycle.skipped', cycle: 71, reason: 'previous cycle still running', runningForMs: 31_000 },
+  ];
+  const { strip } = buildEngineRoom(liveStatus(), events);
+  assert.equal(strip.length, 60);
+  assert.equal(strip[0].cycle, 12);
+  assert.equal(strip.at(-1).tone, 'red');
+  assert.equal(strip.at(-1).title, 'Cycle 71 skipped: previous cycle still running (31 s)');
+  assert.match(strip[0].title, /^Cycle 12 · \d\d:\d\d:\d\d UTC · 1.2 s · normal\nNo post poll\n0 new posts/);
 });

@@ -74,6 +74,14 @@ const errorMessage = (error: unknown) => (error instanceof Error ? error.message
 // What fell between two balance readings; a top-up is not spending
 const spentBetween = (before: bigint, after: bigint) => (before > after ? before - after : 0n);
 
+export type CycleCounts = ReturnType<typeof countCycleEvents>;
+
+// What the cycles did since the agent started
+export interface CycleTotals extends CycleCounts {
+  ausdSpent: bigint;
+  ethSpent: bigint;
+}
+
 export interface CycleStatus {
   cyclesRun: number;
   cyclesSkipped: number;
@@ -81,6 +89,9 @@ export interface CycleStatus {
   lastCycle?: CycleFinished;
   nextAt?: number;
   mode: AgentMode;
+  // The accounts the last cycle would poll
+  watchSet: string[];
+  totals: CycleTotals;
 }
 
 export class CycleRunner {
@@ -96,6 +107,8 @@ export class CycleRunner {
   private lastPollAt: number | undefined;
   private lastMode: AgentMode = 'normal';
   private lastCycle: CycleFinished | undefined;
+  private lastWatchSet: string[] = [];
+  private readonly totals: CycleTotals = { ...countCycleEvents([]), ausdSpent: 0n, ethSpent: 0n };
   private nextAt: number | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
 
@@ -149,6 +162,8 @@ export class CycleRunner {
       cyclesSkipped: this.cyclesSkipped,
       running: Boolean(this.running),
       mode: this.lastMode,
+      watchSet: [...this.lastWatchSet],
+      totals: { ...this.totals },
       ...(this.lastCycle ? { lastCycle: this.lastCycle } : {}),
       ...(this.nextAt === undefined ? {} : { nextAt: this.nextAt }),
     };
@@ -181,6 +196,7 @@ export class CycleRunner {
       // 2. Rules: the accounts that at least one unpaused rule naming this agent watches
       const rules = await step('rules', () => this.deps.vault.listRules());
       const watchSet = rules ? activeWatchSet(this.namingAgent(rules)) : [];
+      if (rules) this.lastWatchSet = watchSet;
 
       // 3. Gate 2 first: open triggers are time-critical and already paid for
       await step('gate2', () => this.deps.engine.checkPending());
@@ -204,6 +220,9 @@ export class CycleRunner {
       const after = health && checked ? await step('summary', () => health.readBalances()) : undefined;
       unsubscribe();
       const before = checked?.balances;
+      const counts = countCycleEvents(appended);
+      const ausdSpent = before && after ? spentBetween(before.ausd, after.ausd) : 0n;
+      const ethSpent = before && after ? spentBetween(before.eth, after.eth) : 0n;
       const finished = log.append({
         kind: 'cycle.finished',
         cycle,
@@ -212,13 +231,16 @@ export class CycleRunner {
         mode,
         polled: accountsPolled.length > 0,
         accountsPolled,
-        ...countCycleEvents(appended),
-        ausdSpent: formatUnits(before && after ? spentBetween(before.ausd, after.ausd) : 0n, AUSD_DECIMALS),
-        ethSpent: formatEther(before && after ? spentBetween(before.eth, after.eth) : 0n),
+        ...counts,
+        ausdSpent: formatUnits(ausdSpent, AUSD_DECIMALS),
+        ethSpent: formatEther(ethSpent),
         nextAt: this.nextAt ?? startedAt + this.cycleMs,
       });
       this.lastCycle = finished as CycleFinished;
       this.cyclesRun += 1;
+      for (const key of Object.keys(counts) as (keyof CycleCounts)[]) this.totals[key] += counts[key];
+      this.totals.ausdSpent += ausdSpent;
+      this.totals.ethSpent += ethSpent;
     } catch (error) {
       // Only the summary itself can land here; the heartbeat must not stop over it
       log.append({ kind: 'error', where: `cycle ${cycle} step summary`, message: errorMessage(error) });

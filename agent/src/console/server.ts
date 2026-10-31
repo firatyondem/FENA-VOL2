@@ -21,6 +21,8 @@ export interface ConsoleServerOptions {
   priceCacheMs?: number;
   // /api/state sends at most this many of the newest events, so the console and the frontend stay fast
   stateEvents?: number;
+  // The agent's schedule, mode, budgets and totals for the Engine Room: in /api/state and with every clock tick
+  status?: () => unknown;
 }
 
 export const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:8000'];
@@ -50,6 +52,7 @@ export const startConsoleServer = ({
   prices,
   priceCacheMs = 10_000,
   stateEvents = 1000,
+  status,
 }: ConsoleServerOptions): Promise<Server> => {
   const streams = new Set<ServerResponse>();
   // Event numbers restart with the agent, so a page that reconnects after a restart must start over
@@ -68,7 +71,15 @@ export const startConsoleServer = ({
       ...SECURITY_HEADERS,
       ...corsHeaders(request),
     });
-    response.end(JSON.stringify({ runId, now: now(), signedPrices: Boolean(prices), events: log.recent(stateEvents) }));
+    response.end(
+      JSON.stringify({
+        runId,
+        now: now(),
+        signedPrices: Boolean(prices),
+        ...(status ? { status: status() } : {}),
+        events: log.recent(stateEvents),
+      })
+    );
   };
 
   // A failed fetch stays cached for its window too, so a paid source is never asked again sooner
@@ -119,7 +130,9 @@ export const startConsoleServer = ({
     for (const stream of streams) stream.write(`event: agent-event\ndata: ${JSON.stringify(event)}\n\n`);
   });
   const clock = setInterval(() => {
-    for (const stream of streams) stream.write(`event: clock\ndata: ${JSON.stringify({ now: now() })}\n\n`);
+    if (streams.size === 0) return;
+    const tick = JSON.stringify({ now: now(), ...(status ? { status: status() } : {}) });
+    for (const stream of streams) stream.write(`event: clock\ndata: ${tick}\n\n`);
   }, clockIntervalMs);
   clock.unref();
 

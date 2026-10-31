@@ -10,6 +10,7 @@ import type { Classifier } from './classifier/types.ts';
 import { Budget, budgetedFetch, GuardedVault, PRICED_AIRNODES, readBudgetSettings } from './engine/budget.ts';
 import { CycleRunner } from './engine/cycle.ts';
 import { airnodeSourceOf, guardedClassifier, guardedFetch, SourceGuard } from './engine/sources.ts';
+import { buildStatus } from './engine/status.ts';
 import { SellKeeper } from './engine/keeper.ts';
 import { TriggerEngine } from './engine/trigger-engine.ts';
 import type { EventLog } from './log.ts';
@@ -171,5 +172,19 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
     }
   }
   cycles.start();
-  return { now, fetchPrice, cycles, budget, sources, stop: () => cycles.stop() };
+  const startedAt = Date.now();
+  const restarts = Number(process.env.AGENT_RESTARTS || 0);
+  const status = () =>
+    buildStatus({
+      cycles,
+      budget,
+      sources,
+      agent: account.address,
+      ...(payer ? { payer } : {}),
+      startedAt,
+      restarts,
+      cycleIntervalSec,
+      pollIntervalSec,
+    });
+  return { now, fetchPrice, cycles, budget, sources, status, stop: () => cycles.stop() };
 };

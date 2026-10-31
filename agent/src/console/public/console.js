@@ -1,8 +1,10 @@
 // Renders the explanation log. Post text is untrusted, so every value goes in through textContent, never as HTML.
-import { buildView, formatBps, trackPosition } from './view-model.js';
+import { buildEngineRoom, buildView, formatBps, trackPosition } from './view-model.js';
 
 const events = [];
 let agentNow = Math.floor(Date.now() / 1000);
+// The live agent's schedule, budgets and totals; the replay sends none
+let status;
 
 const $ = (id) => document.getElementById(id);
 const clockTime = (seconds) => new Date(seconds * 1000).toISOString().slice(11, 19);
@@ -172,7 +174,73 @@ const renderTamper = (results) => {
   $('tamper-empty').hidden = results.length > 0;
 };
 
+const renderEngine = (room) => {
+  $('engine').hidden = !room;
+  if (!room) return;
+  const heartbeat = $('heartbeat');
+  heartbeat.textContent = room.heartbeat.text;
+  heartbeat.dataset.stale = String(room.heartbeat.stale);
+  const mode = $('mode-badge');
+  mode.textContent = room.mode.mode;
+  mode.dataset.mode = room.mode.mode;
+  mode.title = room.mode.reason;
+  $('engine-schedule').textContent = room.schedule;
+
+  $('wallets').replaceChildren(
+    ...room.wallets.map((wallet) => {
+      const card = el('li', 'wallet');
+      const link = el('a', 'wallet__address', wallet.short);
+      link.href = wallet.link;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.title = wallet.address;
+      card.append(
+        el('span', 'wallet__role', wallet.role),
+        el('strong', 'wallet__balance', wallet.balance),
+        link,
+        el('span', 'wallet__purpose', wallet.purpose)
+      );
+      return card;
+    })
+  );
+
+  $('budgets').replaceChildren(
+    ...room.budgets.map((budget) => {
+      const row = el('li', 'budget');
+      row.dataset.tone = budget.tone;
+      const track = el('span', 'budget__track');
+      const fill = el('span', 'budget__fill');
+      fill.style.width = `${budget.pct}%`;
+      track.append(fill);
+      track.setAttribute('role', 'img');
+      track.setAttribute('aria-label', `${budget.label}: ${budget.text}`);
+      row.append(el('span', 'budget__label', budget.label), track, el('span', 'budget__text', budget.text));
+      return row;
+    })
+  );
+
+  $('strip').replaceChildren(
+    ...room.strip.map((cycle) => {
+      const square = el('li', 'strip__cycle');
+      square.dataset.tone = cycle.tone;
+      square.title = cycle.title;
+      square.tabIndex = 0;
+      square.setAttribute('aria-label', cycle.title);
+      return square;
+    })
+  );
+
+  $('engine-totals').replaceChildren(
+    ...room.totals.map(([label, value]) => {
+      const item = el('li');
+      item.append(el('strong', '', String(value)), el('span', '', label));
+      return item;
+    })
+  );
+};
+
 const render = () => {
+  renderEngine(buildEngineRoom(status, events));
   const view = buildView(events);
   renderFacts(view.meta);
   renderTally(view.counts);
@@ -205,6 +273,7 @@ const connect = async () => {
   const state = await fetch('/api/state').then((response) => response.json());
   events.splice(0, events.length, ...state.events);
   agentNow = state.now;
+  status = state.status;
   render();
 
   const stream = new EventSource(`/api/stream?since=${state.events.at(-1)?.seq ?? 0}`);
@@ -222,7 +291,9 @@ const connect = async () => {
     scheduleRender();
   });
   stream.addEventListener('clock', (message) => {
-    agentNow = JSON.parse(message.data).now;
+    const tick = JSON.parse(message.data);
+    agentNow = tick.now;
+    if (tick.status) status = tick.status;
     scheduleRender();
   });
 };
