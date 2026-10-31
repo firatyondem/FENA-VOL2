@@ -40,6 +40,39 @@ const REASONS = {
   PostAlreadyUsed: "this post already started an investment",
   PositionAlreadySold: "the position is already sold",
   ZeroAmount: "enter an amount above 0",
+  // The deployed vault's custom errors (live mode)
+  InsufficientBalance: "there isn't enough mUSDC for that",
+  InvalidRule: "the rule breaks one of the vault's checks",
+  RuleLooserThanProfile: "a value is looser than the asset's profile allows",
+  AccountNotRegistered: "that account isn't registered with the vault",
+  AssetNotRegistered: "that asset isn't registered with the vault",
+  AssetNotAllowed: "this asset isn't in your rule",
+  RuleIsPaused: "your rule is paused",
+  NotAgent: "only the agent your rule names may open a price check",
+  NotPositionOwner: "only the owner may sell this by hand",
+  PositionNotOpen: "the position is already sold",
+  TakeProfitNotReached: "the price hasn't reached your take-profit level",
+  StagnationDelayNotOver: "the stagnation wait isn't over yet",
+  PriceOutsideStagnationBand: "the price moved too much for a stagnation exit",
+  PriceBeforeBuy: "the price was taken before the investment",
+  PriceTooOld: "the signed price is too old, so the market may be closed",
+  NotSignedByAirnode: "it wasn't signed by the expected Airnode (a value was edited, or the key is wrong)",
+  TweetAlreadyUsed: "this post already started a price check for this asset",
+  PriceOutsideTweetWindow: "the price wasn't taken within 10 minutes after the post",
+  TriggerNotOpen: "the price check is already closed",
+  WaitNotOver: "the minimum wait isn't over yet; the check stays open",
+  WindowClosed: "the time window passed; nothing was invested",
+  WindowNotClosed: "the time window is still open",
+  TrendTooWeak: "the price didn't rise enough",
+  SpikeTooHigh: "the price rose more than your maximum rise",
+  PerTradeLimitExceeded: "the amount is above your max per investment",
+  DailyBudgetExceeded: "this asset's share of today's budget is used up",
+  DexDeliveredLess: "the exchange delivered less than it promised",
+  // The wallet (live mode)
+  NoWallet: "no wallet found: install MetaMask, or use practice mode",
+  WrongNetwork: "your wallet is on another network",
+  UserRejected: "you cancelled in your wallet",
+  NotConnected: "connect your wallet first",
 };
 const reasonText = e => e.reason ? (REASONS[e.reason] || e.reason) : e.message;
 
@@ -859,8 +892,49 @@ $("deleteBtn").onclick = () => {
 };
 
 // =========================================================
+// Live mode: the deployed vault instead of Mock
+// =========================================================
+const live = { ready: false, state: null };
+
+function showBanner(html) {
+  $("liveBanner").innerHTML = html;
+  $("liveBanner").classList.toggle("hidden", !html);
+}
+const practiceLink = () => {
+  const url = new URL(location.href);
+  url.searchParams.set("mode", "practice");
+  return `<a class="btn small" href="${esc(url.toString())}">Switch to practice mode</a>`;
+};
+
+function renderModeChip() {
+  const network = NETWORKS[Chain.chainId];
+  if (MODE === "practice") {
+    $("modeText").textContent = "practice mode";
+    $("modeDot").className = "dot warn";
+    $("modeChip").title = "Practice money and a practice contract in this browser";
+    return;
+  }
+  $("modeText").textContent = `live · ${network ? network.name : "chain " + Chain.chainId}`;
+  $("modeDot").className = "dot " + (live.ready ? "ok" : "bad");
+  $("modeChip").title = live.ready ? `Reading the vault at ${Chain.deployment.vault}` : "Not connected to the vault";
+}
+
+async function startLive() {
+  renderModeChip();
+  try {
+    await Chain.load();
+  } catch (err) {
+    showBanner(`<b>Live mode can't start.</b> ${esc(err.message)} ${practiceLink()}`);
+    return;
+  }
+  live.ready = true;
+  renderModeChip();
+}
+
+// =========================================================
 // Start: stay logged in for this tab, otherwise show the login straight away
 // =========================================================
+if (MODE === "live") startLive(); else renderModeChip();
 renderRuleBuilder();
 renderPipeline();
 renderStats();

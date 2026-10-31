@@ -19,10 +19,13 @@
   <header class="top">
     <div class="logo"><span class="logo-mark"></span>SIGNAL VAULT</div>
     <div class="top-right">
-      <span class="chip" title="No blockchain yet: practice money and a practice contract"><span class="dot warn"></span>practice mode</span>
+      <span class="chip" id="modeChip" title="No blockchain yet: practice money and a practice contract"><span class="dot warn" id="modeDot"></span><span id="modeText">practice mode</span></span>
       <button class="chip" id="profileChip" title="Your profile"><span class="avatar" id="avatarSmall">?</span><span id="profileChipName">log in</span></button>
     </div>
   </header>
+
+  <!-- ===== Live mode: load and wallet problems ===== -->
+  <div class="banner hidden" id="liveBanner" role="alert"></div>
 
   <!-- ===== Hero ===== -->
   <section class="hero">
@@ -319,6 +322,8 @@
 <script src="vendor/ethers.umd.min.js"></script>
 <script src="js/config.js"></script>
 <script src="js/mock.js"></script>
+<script src="js/units.js"></script>
+<script src="js/chain.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
