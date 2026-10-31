@@ -41,8 +41,10 @@ What live mode shows:
   open position is valued at the last price the vault verified, with its age; the page never makes up a price. "Sell
   now" fetches a signed price from the agent's console, shows it, and sells at it on a second click. Without a price
   source it stays disabled: the keeper sells at take profit or after the stagnation delay.
-- **Tamper test** stays a browser simulation in both modes and says so; `npm run tamper-demo` in `agent/` sends the
-  same forgeries to the real vault.
+- **Tamper test** asks the deployed vault's read-only `checkPrice`: no wallet, no gas, no open price check, and nothing
+  can move. The buttons take a fresh response and its forgeries from the agent's console (`/api/tamper-set`, while the
+  agent runs live); a pasted response goes straight to the vault. In practice mode the tab stays a browser simulation
+  and says so.
 
 Every transaction is simulated first, so a refusal shows the vault's reason (for example "the response is too old")
 before the wallet asks for anything.
