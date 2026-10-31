@@ -159,6 +159,23 @@
           "text": "/data/tweets/0/text"
         }
       }
+    },
+    "EuphratY": {
+      "airnode": "0x7B02Fd3324D2dC362f65a9c01e59EC5fDb4E1CCB",
+      "pinned": false,
+      "requestHash": "0x64826290ee2cd50ece193e5e766b27a85584b2d25c8f2bb350eccadb366ccfd6",
+      "request": {
+        "operation": "userLastTweets",
+        "parameters": {
+          "userName": "EuphratY"
+        },
+        "responseProjection": {
+          "author": "/data/tweets/0/author/userName",
+          "createdAt": "/data/tweets/0/createdAt",
+          "id": "/data/tweets/0/id",
+          "text": "/data/tweets/0/text"
+        }
+      }
     }
   }
 }

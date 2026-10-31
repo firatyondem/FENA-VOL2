@@ -28,5 +28,11 @@
     "label": "FENA demo account",
     "assets": ["ETH", "BTC", "DOGE"],
     "pinned": false
+  },
+  {
+    "handle": "EuphratY",
+    "label": "FENA demo",
+    "assets": ["ETH", "BTC", "DOGE"],
+    "pinned": false
   }
 ]

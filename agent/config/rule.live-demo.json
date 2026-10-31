@@ -3,7 +3,7 @@
   "buyAmountUsdc": 50,
   "maxPerTradeUsdc": 50,
   "dailyLimitUsdc": 200,
-  "accounts": ["fenahackdemo"],
+  "accounts": ["EuphratY"],
   "assets": [
     {
       "asset": "ETH",
