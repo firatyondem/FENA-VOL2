@@ -5,7 +5,7 @@ import { deriveRequestHash, type SignedResponse } from '../src/airnode/attestati
 import { signResponse } from '../src/airnode/sign.ts';
 import { SimVault } from '../src/chain/sim-vault.ts';
 import type { Position, Rule } from '../src/chain/vault.ts';
-import { decideSell, SellKeeper } from '../src/engine/keeper.ts';
+import { decideSell, SellKeeper, takeProfitTarget } from '../src/engine/keeper.ts';
 import { EventLog } from '../src/log.ts';
 import { getAsset, loadProfiles, priceRequest } from '../src/profiles.ts';
 import { DEMO_ETH_RULE, FIXTURE_AIRNODE_KEY, P0_TIME } from '../scripts/fixture-set.ts';
@@ -120,4 +120,12 @@ test('the keeper sells a bought position at take profit with a signed price', as
 
   await keeper.tick();
   assert.equal(log.recent().length, 1, 'a closed position is not sold again');
+});
+
+test('the take-profit target rounds up, as the vault does', () => {
+  // 3 wei at +8% is 3.24 wei: the vault wants 4, so 3 must not sell
+  const tiny = { ...position, entryPrice: 3n };
+  assert.equal(decideSell(tiny, params, 3n, 1_100, ['take-profit']), undefined);
+  assert.equal(decideSell(tiny, params, 4n, 1_100, ['take-profit']), 'take-profit');
+  assert.equal(takeProfitTarget(2000n * e18, 800), 2160n * e18, 'exact when it divides');
 });

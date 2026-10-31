@@ -27,6 +27,24 @@
     <ul class="tally" id="tally" aria-label="Totals"></ul>
     <div class="notices" id="notices" role="status" aria-live="polite"></div>
 
+    <section class="engine" id="engine" aria-labelledby="engine-head" hidden>
+      <div class="engine__head">
+        <h2 class="column__head" id="engine-head"><span class="column__no">0</span>The Engine Room</h2>
+        <p class="engine__pulse">
+          <span class="heartbeat" id="heartbeat">No cycle yet</span>
+          <span class="mode" id="mode-badge"></span>
+        </p>
+      </div>
+      <p class="column__dek" id="engine-schedule"></p>
+      <div class="engine__grid">
+        <ul class="wallets" id="wallets" aria-label="The agent's wallets"></ul>
+        <ul class="budgets" id="budgets" aria-label="The agent's own limits"></ul>
+      </div>
+      <h3 class="engine__subhead">The last cycles <span class="engine__legend">grey quiet · blue polled · green bought or sold · amber rejected · red error or skipped</span></h3>
+      <ol class="strip" id="strip" aria-label="The last cycles, oldest first"></ol>
+      <ul class="engine__totals" id="engine-totals" aria-label="Totals since the agent started"></ul>
+    </section>
+
     <main class="desk">
       <section class="column" aria-labelledby="wire-head">
         <h2 class="column__head" id="wire-head"><span class="column__no">I</span>The Wire</h2>

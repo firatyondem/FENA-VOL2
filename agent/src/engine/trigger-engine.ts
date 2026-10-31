@@ -5,9 +5,17 @@ import { type Address, formatUnits } from 'viem';
 import { deriveRequestHash, type SignedResponse, verifySignedResponse } from '../airnode/attestation.ts';
 import { formatFixedPoint } from '../airnode/projected-json.ts';
 import { prefilter, type Candidate, type Classification, type Classifier } from '../classifier/types.ts';
-import { type Rule, type RuleAsset, VaultRejection, type VaultPort } from '../chain/vault.ts';
+import {
+  type Expired,
+  type OpenTriggerRecord,
+  type Rule,
+  type RuleAsset,
+  transactionFields,
+  VaultRejection,
+  type VaultPort,
+} from '../chain/vault.ts';
 import type { EventLog } from '../log.ts';
-import { getAsset, isPriceFresh, type Profiles, readSignedPrice, type SignedPrice } from '../profiles.ts';
+import { getAsset, isPriceFresh, type PricePoint, type Profiles, readSignedPrice, type SignedPrice } from '../profiles.ts';
 import { latestTweetRequest, type Post, readSignedPost, type WatchedAccount } from '../sources/twitter.ts';
 import { changeBps, checkTrend, checkTweetToP0, describeGateFailure } from './gates.ts';
 
@@ -31,7 +39,8 @@ export interface PendingTrigger {
   triggerId: string;
   ruleId: string;
   asset: string;
-  p0: SignedPrice;
+  // Gate 2 needs only P0's price and time, which the vault keeps too, so a restart can restore them
+  p0: PricePoint;
   params: RuleAsset;
   lastCheck: number;
   // Set once the agent stops chasing P1 (spike cap); the trigger then only waits to expire
@@ -42,6 +51,20 @@ export interface PendingTrigger {
 const TERMINAL_CONFIRM_REJECTIONS = new Set(['TriggerNotOpen', 'WindowClosed', 'SpikeTooHigh']);
 
 const price18 = (value: bigint) => formatFixedPoint(value, 18);
+
+// The rule of an asset its user took out of the rule: no window, so the trigger expires at once
+const closedWindow = (asset: string): RuleAsset => ({
+  asset,
+  budgetShareBps: 0,
+  trendThresholdBps: 0,
+  spikeCapBps: 0,
+  minWaitSec: 0,
+  maxWindowSec: 0,
+  cooldownSec: 0,
+  takeProfitBps: 0,
+  stagnationBandBps: 0,
+  stagnationAfterSec: 0,
+});
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -61,6 +84,30 @@ export class TriggerEngine {
 
   pendingTriggers(): PendingTrigger[] {
     return [...this.pending.values()];
+  }
+
+  // After a restart: puts the vault's open triggers back on the Gate 2 list, with P0 and t0 from the vault and the window
+  // from the user's rule in force. An asset the rule no longer has gets no window, as in the vault, so the first cycle
+  // expires it.
+  restorePending(records: readonly OpenTriggerRecord[], rules: readonly Rule[]): string[] {
+    const restored: string[] = [];
+    for (const record of records) {
+      if (this.pending.has(record.triggerId)) continue;
+      const rule = rules.find((entry) => entry.id.toLowerCase() === record.ruleId.toLowerCase());
+      const params = rule?.assets.find((entry) => entry.asset === record.asset) ?? closedWindow(record.asset);
+      this.pending.set(record.triggerId, {
+        triggerId: record.triggerId,
+        ruleId: record.ruleId,
+        asset: record.asset,
+        p0: { price: record.p0, sourceTime: record.t0 },
+        params,
+        lastCheck: 0,
+        abandoned: false,
+      });
+      restored.push(record.triggerId);
+    }
+    this.deps.log.append({ kind: 'agent.recovered', openTriggers: restored });
+    return restored;
   }
 
   // One poll of one watched account: at most one new post, classified once for every rule that watches the account. A
@@ -206,7 +253,7 @@ export class TriggerEngine {
           closesAt: p0.sourceTime + params.maxWindowSec,
           thresholdBps: params.trendThresholdBps,
           spikeCapBps: params.spikeCapBps,
-          ...(opened.txHash ? { txHash: opened.txHash } : {}),
+          ...transactionFields(opened),
         });
       } catch (error) {
         if (error instanceof VaultRejection) {
@@ -266,7 +313,7 @@ export class TriggerEngine {
           usdcIn: formatUnits(bought.usdcIn, profiles.usdcDecimals),
           assetOut: formatUnits(bought.assetOut, 18),
           price: price18(bought.price),
-          ...(bought.txHash ? { txHash: bought.txHash } : {}),
+          ...transactionFields(bought),
         });
       } catch (error) {
         const reason = error instanceof VaultRejection ? error.reason : errorMessage(error);
@@ -277,8 +324,9 @@ export class TriggerEngine {
   }
 
   private async expire(trigger: PendingTrigger) {
+    let expired: Expired | void = undefined;
     try {
-      await this.deps.vault.expireTrigger(trigger.triggerId);
+      expired = await this.deps.vault.expireTrigger(trigger.triggerId);
     } catch (error) {
       if (!(error instanceof VaultRejection && error.reason === 'TriggerNotOpen')) {
         this.deps.log.append({ kind: 'error', where: `expire ${trigger.triggerId}`, message: errorMessage(error) });
@@ -286,6 +334,11 @@ export class TriggerEngine {
       }
     }
     this.pending.delete(trigger.triggerId);
-    this.deps.log.append({ kind: 'trigger.expired', triggerId: trigger.triggerId, asset: trigger.asset });
+    this.deps.log.append({
+      kind: 'trigger.expired',
+      triggerId: trigger.triggerId,
+      asset: trigger.asset,
+      ...transactionFields(expired),
+    });
   }
 }

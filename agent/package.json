@@ -10,6 +10,7 @@
   },
   "scripts": {
     "start": "node --env-file-if-exists=.env src/main.ts",
+    "live:supervised": "node scripts/supervise.ts",
     "test": "node --test \"test/**/*.test.ts\"",
     "typecheck": "tsc",
     "request-hashes": "node scripts/request-hashes.ts",
@@ -18,7 +19,11 @@
     "tamper-demo": "node --env-file-if-exists=.env scripts/tamper-demo.ts",
     "export-abi": "node scripts/export-abi.ts",
     "test:e2e": "node --test test/e2e/*.e2e.ts",
-    "set-rule": "node --env-file-if-exists=.env scripts/set-rule.ts"
+    "set-rule": "node --env-file-if-exists=.env scripts/set-rule.ts",
+    "wallets": "node --env-file-if-exists=.env scripts/wallets.ts",
+    "run-report": "node scripts/run-report.ts",
+    "add-account": "node --env-file-if-exists=.env scripts/add-account.ts",
+    "local-stage": "node scripts/local-stage.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",

@@ -118,7 +118,7 @@ contract DeployScriptFlowTest is Test {
     function checkAccounts(Vault vault, address fixtureAirnode) internal view {
         string memory hashes = vm.readFile(HASHES);
         string[] memory handles = vm.parseJsonKeys(hashes, ".posts");
-        assertEq(handles.length, 4, "four watched accounts");
+        assertEq(handles.length, 5, "five watched accounts");
         for (uint256 i; i < handles.length; i++) {
             string memory path = string.concat(".posts.", handles[i]);
             address expected = fixtureAirnode != address(0)

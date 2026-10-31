@@ -6,7 +6,17 @@ import { fileURLToPath } from 'node:url';
 import type { Classification } from './classifier/types.ts';
 
 export type AgentEvent =
-  | { kind: 'agent.started'; mode: string; vault: string; classifier: string; accounts: string[] }
+  | {
+      kind: 'agent.started';
+      mode: string;
+      vault: string;
+      classifier: string;
+      accounts: string[];
+      // How often the supervisor restarted the agent before this start
+      restarts?: number;
+      // The intervals and limits this run ran with (live mode)
+      settings?: Record<string, string | number>;
+    }
   | { kind: 'post.seen'; account: string; postId: string; text: string; createdAt: number }
   | { kind: 'post.skipped'; account: string; postId: string; reason: string }
   | { kind: 'post.classified'; account: string; postId: string; classifier: string; results: Classification[] }
@@ -24,6 +34,8 @@ export type AgentEvent =
       thresholdBps: number;
       spikeCapBps: number;
       txHash?: string;
+      // What the transaction cost the agent wallet in gas
+      gasEth?: string;
     }
   | { kind: 'trigger.checked'; triggerId: string; asset: string; p1: string; changeBps: number; verdict: string }
   | {
@@ -35,12 +47,62 @@ export type AgentEvent =
       assetOut: string;
       price: string;
       txHash?: string;
+      gasEth?: string;
     }
   | { kind: 'trigger.rejected'; triggerId?: string; asset: string; stage: 'open' | 'confirm'; reason: string }
-  | { kind: 'trigger.expired'; triggerId: string; asset: string }
-  | { kind: 'position.sold'; positionId: string; asset: string; sellKind: string; price: string; usdcOut: string }
+  | { kind: 'trigger.expired'; triggerId: string; asset: string; txHash?: string; gasEth?: string }
+  | {
+      kind: 'position.sold';
+      positionId: string;
+      asset: string;
+      sellKind: string;
+      price: string;
+      usdcOut: string;
+      txHash?: string;
+      gasEth?: string;
+    }
   | { kind: 'payment.settled'; transaction: string }
   | { kind: 'tamper.result'; name: string; expected: string; actual: string; passed: boolean }
+  | {
+      kind: 'cycle.finished';
+      cycle: number;
+      // Milliseconds since the epoch
+      startedAt: number;
+      durationMs: number;
+      mode: 'normal' | 'saving' | 'halted';
+      polled: boolean;
+      accountsPolled: string[];
+      postsNew: number;
+      classified: number;
+      triggersOpened: number;
+      p1Checks: number;
+      bought: number;
+      rejected: number;
+      expired: number;
+      sold: number;
+      paidCalls: number;
+      txSent: number;
+      // From the balances at the start and the end of the cycle; a payment can settle a block late
+      ausdSpent: string;
+      ethSpent: string;
+      errors: number;
+      nextAt: number;
+    }
+  | { kind: 'cycle.skipped'; cycle: number; reason: string; runningForMs: number }
+  // A source that failed `failures` times in a row is skipped until retryAt (milliseconds); recovered on its next success
+  | { kind: 'source.degraded'; source: string; failures: number; retryAt: number }
+  | { kind: 'source.recovered'; source: string }
+  // The open triggers a restart picked up again from the vault
+  | { kind: 'agent.recovered'; openTriggers: string[] }
+  | {
+      kind: 'budget.mode';
+      mode: 'normal' | 'saving' | 'halted';
+      reason: string;
+      ausdSpentToday: string;
+      ethSpentToday: string;
+      ausdBalance: string;
+      ethBalance: string;
+    }
   | { kind: 'error'; where: string; message: string };
 
 export type LoggedEvent = AgentEvent & { seq: number; at: number };
@@ -60,7 +122,8 @@ export class EventLog {
   private readonly now: () => number;
   private seq = 0;
 
-  constructor({ file, capacity = 500, now = Date.now }: EventLogOptions = {}) {
+  // 5,000 events hold a multi-hour live run: two cycle summaries a minute plus everything the cycles did
+  constructor({ file, capacity = 5000, now = Date.now }: EventLogOptions = {}) {
     this.capacity = capacity;
     this.now = now;
     if (file) {

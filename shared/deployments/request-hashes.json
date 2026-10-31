@@ -142,6 +142,23 @@
           "text": "/data/tweets/0/text"
         }
       }
+    },
+    "fenahackdemo": {
+      "airnode": "0x7B02Fd3324D2dC362f65a9c01e59EC5fDb4E1CCB",
+      "pinned": false,
+      "requestHash": "0x23f6215ccff9327c9cedd9d789e2585c825f0af84d2b79eb183624eea18d7bdc",
+      "request": {
+        "operation": "userLastTweets",
+        "parameters": {
+          "userName": "fenahackdemo"
+        },
+        "responseProjection": {
+          "author": "/data/tweets/0/author/userName",
+          "createdAt": "/data/tweets/0/createdAt",
+          "id": "/data/tweets/0/id",
+          "text": "/data/tweets/0/text"
+        }
+      }
     }
   }
 }

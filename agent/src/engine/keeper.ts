@@ -4,11 +4,17 @@ import { formatUnits } from 'viem';
 import type { SignedResponse } from '../airnode/attestation.ts';
 import { formatFixedPoint } from '../airnode/projected-json.ts';
 import type { Position, RuleAsset, SellKind, VaultPort } from '../chain/vault.ts';
-import { VaultRejection } from '../chain/vault.ts';
+import { transactionFields, VaultRejection } from '../chain/vault.ts';
 import type { EventLog } from '../log.ts';
 import { getAsset, isPriceFresh, type Profiles, readSignedPrice } from '../profiles.ts';
 
 const BPS = 10_000n;
+
+// The vault's take-profit target, entry * (1 + take profit) rounded up (Vault._checkTakeProfit uses Math.ceilDiv)
+export const takeProfitTarget = (entry: bigint, takeProfitBps: number) => {
+  const scaled = entry * (BPS + BigInt(takeProfitBps));
+  return (scaled + BPS - 1n) / BPS;
+};
 
 type SellParams = Pick<RuleAsset, 'takeProfitBps' | 'stagnationBandBps' | 'stagnationAfterSec' | 'stopLossBps'>;
 
@@ -28,7 +34,7 @@ export const decideSell = (
   if (
     allowed.includes('take-profit') &&
     params.takeProfitBps > 0 &&
-    price >= (entry * (BPS + BigInt(params.takeProfitBps))) / BPS
+    price >= takeProfitTarget(entry, params.takeProfitBps)
   ) {
     return 'take-profit';
   }
@@ -84,6 +90,7 @@ export class SellKeeper {
           sellKind: kind,
           price: formatFixedPoint(sold.price, 18),
           usdcOut: formatUnits(sold.usdcOut, profiles.usdcDecimals),
+          ...transactionFields(sold),
         });
       } catch (error) {
         const message = error instanceof VaultRejection ? error.reason : (error as Error).message;

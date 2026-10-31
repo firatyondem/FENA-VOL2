@@ -7,6 +7,7 @@ import {
   BaseError,
   type Chain,
   ContractFunctionRevertedError,
+  type GetContractEventsReturnType,
   type Hash,
   type Hex,
   isAddressEqual,
@@ -16,6 +17,7 @@ import {
   type PublicClient,
   toHex,
   type Transport,
+  WaitForTransactionReceiptTimeoutError,
   type WalletClient,
 } from 'viem';
 import { deriveRequestHash, type SignedResponse } from '../airnode/attestation.ts';
@@ -24,12 +26,15 @@ import { latestTweetRequest, type WatchedAccount } from '../sources/twitter.ts';
 import { vaultAbi } from './vault-abi.ts';
 import {
   type Bought,
+  type Expired,
   type OpenedTrigger,
   type OpenTriggerInput,
+  type OpenTriggerRecord,
   type Position,
   type Rule,
   type SellKind,
   type Sold,
+  TxTimeout,
   VaultRejection,
   type VaultPort,
 } from './vault.ts';
@@ -47,6 +52,9 @@ export const toVaultResponse = ({ requestHash, timestamp, data, signature }: Sig
 
 const SELL_REASONS: Partial<Record<SellKind, number>> = { manual: 0, 'take-profit': 1, stagnation: 2 };
 
+// IVault.TriggerStatus: None, Open, Confirmed, Expired
+const TRIGGER_OPEN = 1;
+
 // The custom error name when `error` is a revert, so the vault refused; undefined for anything else, such as an RPC that
 // did not answer, which says nothing about the request.
 export const revertName = (error: unknown): string | undefined => {
@@ -61,7 +69,37 @@ export const revertReason = (error: unknown): string =>
   revertName(error) ??
   (error instanceof BaseError ? error.shortMessage : error instanceof Error ? error.message : String(error));
 
+// The vault's own checks on a price response. Anyone may ask and nothing moves, so this needs no wallet; a refusal comes
+// back as a VaultRejection, like a write's.
+export const checkPrice = async (publicClient: PublicClient, address: Address, asset: string, response: SignedResponse) => {
+  try {
+    const [price, priceTime] = await publicClient.readContract({
+      address,
+      abi: vaultAbi,
+      functionName: 'checkPrice',
+      args: [assetIdOf(asset), toVaultResponse(response)],
+    });
+    return { price, priceTime };
+  } catch (error) {
+    const name = revertName(error);
+    if (name) throw new VaultRejection(name);
+    throw error;
+  }
+};
+
 type EventName = 'TriggerOpened' | 'TriggerConfirmed' | 'PositionSold' | 'TriggerExpired' | 'RuleSet';
+
+// The events the agent scans, each read once per block range and cached
+type ScannedEvent = 'RuleSet' | 'TriggerConfirmed' | 'TriggerOpened';
+
+// Blocks per getLogs request; a provider that refuses the range gets half as many, down to one
+const LOG_CHUNK_BLOCKS = 2000n;
+
+// A provider's way of saying the block range or the result is too large, as opposed to an outage or a rate limit
+export const isRangeTooLarge = (error: unknown) => {
+  const text = error instanceof BaseError ? `${error.shortMessage} ${error.details}` : String(error);
+  return /block range|range (is )?too (large|wide|big)|exceeds? (the )?max|response size|more than \d+ (results|logs)/i.test(text);
+};
 
 export const readEvent = <Name extends EventName>(logs: Log[], eventName: Name) => {
   const [event] = parseEventLogs({ abi: vaultAbi, logs, eventName });
@@ -80,6 +118,8 @@ export interface ViemVaultOptions {
   fromBlock?: bigint;
   // Seconds a rule read stays fresh
   cacheSec?: number;
+  // How long a sent transaction may take to be mined before the agent gives up on it for this cycle
+  txTimeoutMs?: number;
 }
 
 export class ViemVault implements VaultPort {
@@ -91,7 +131,10 @@ export class ViemVault implements VaultPort {
   private readonly accountHandles: Map<string, WatchedAccount>;
   private readonly positions = new Map<string, Position>();
   private rules: { at: number; rules: Rule[] } | undefined;
-  private positionsScanned = false;
+  // Each scanned event's logs so far, and the last block they cover
+  private readonly logs = new Map<ScannedEvent, { toBlock: bigint; events: unknown[] }>();
+  // Positions of other agents' users, so they are not read again on every call
+  private readonly foreignPositions = new Set<string>();
 
   constructor(options: ViemVaultOptions) {
     this.options = options;
@@ -109,11 +152,37 @@ export class ViemVault implements VaultPort {
     return this.assetKeys.get(assetId.toLowerCase());
   }
 
+  // The vault's `eventName` logs from the deployment block to the chain head. Each call fetches only the blocks after the
+  // last call's, in chunks; a failed chunk keeps what came before it, so the next call resumes there.
+  private async scan<Name extends ScannedEvent>(
+    eventName: Name
+  ): Promise<GetContractEventsReturnType<typeof vaultAbi, Name>> {
+    const { publicClient, address, fromBlock = 0n } = this.options;
+    const cached = this.logs.get(eventName) ?? { toBlock: fromBlock - 1n, events: [] };
+    this.logs.set(eventName, cached);
+    // Uncached: viem keeps a block number for seconds, and a scan that stops at a stale head misses a log just mined
+    const head = await publicClient.getBlockNumber({ cacheTime: 0 });
+    let span = LOG_CHUNK_BLOCKS;
+    while (cached.toBlock < head) {
+      const start = cached.toBlock + 1n;
+      const end = start + span - 1n < head ? start + span - 1n : head;
+      try {
+        const chunk = await publicClient.getContractEvents({ address, abi: vaultAbi, eventName, fromBlock: start, toBlock: end });
+        cached.events.push(...chunk);
+        cached.toBlock = end;
+      } catch (error) {
+        if (!isRangeTooLarge(error) || span === 1n) throw error;
+        span /= 2n;
+      }
+    }
+    return cached.events as GetContractEventsReturnType<typeof vaultAbi, Name>;
+  }
+
   async listRules(): Promise<Rule[]> {
     const now = Date.now() / 1000;
     if (this.rules && now - this.rules.at < (this.options.cacheSec ?? 30)) return this.rules.rules;
-    const { publicClient, address, fromBlock = 0n } = this.options;
-    const events = await publicClient.getContractEvents({ address, abi: vaultAbi, eventName: 'RuleSet', fromBlock });
+    const { publicClient, address } = this.options;
+    const events = await this.scan('RuleSet');
     // setRule replaces a rule, so each user's latest RuleSet is the rule in force
     const latest = new Map<Address, (typeof events)[number]>();
     for (const event of events) if (event.args.user) latest.set(event.args.user, event);
@@ -171,22 +240,21 @@ export class ViemVault implements VaultPort {
     return rules;
   }
 
-  // Open positions of this agent's users: found once from TriggerConfirmed, so a restart forgets none, then refreshed
+  // Open positions of this agent's users, from TriggerConfirmed, so a restart forgets none and a buy confirmed by someone
+  // else is found too; then each open one's status is refreshed
   async listPositions(): Promise<Position[]> {
-    const { publicClient, address, fromBlock = 0n } = this.options;
-    if (!this.positionsScanned) {
+    const { publicClient, address } = this.options;
+    const confirmed = await this.scan('TriggerConfirmed');
+    const unseen = confirmed.flatMap((event) => {
+      const id = event.args.positionId?.toString();
+      return id && !this.positions.has(id) && !this.foreignPositions.has(id) ? [id] : [];
+    });
+    if (unseen.length > 0) {
       const users = new Set((await this.listRules()).map((rule) => rule.id.toLowerCase()));
-      const confirmed = await publicClient.getContractEvents({
-        address,
-        abi: vaultAbi,
-        eventName: 'TriggerConfirmed',
-        fromBlock,
-      });
-      for (const event of confirmed) {
-        const id = event.args.positionId;
-        if (id !== undefined) await this.loadPosition(id.toString(), users);
+      for (const id of unseen) {
+        await this.loadPosition(id, users);
+        if (!this.positions.has(id)) this.foreignPositions.add(id);
       }
-      this.positionsScanned = true;
     }
     for (const position of this.positions.values()) {
       if (!position.open) continue;
@@ -199,6 +267,23 @@ export class ViemVault implements VaultPort {
       position.open = onChain.isOpen;
     }
     return [...this.positions.values()];
+  }
+
+  // The triggers of this agent's users that are still open, from TriggerOpened and each trigger's status
+  async listOpenTriggers(): Promise<OpenTriggerRecord[]> {
+    const { publicClient, address } = this.options;
+    const users = new Set((await this.listRules()).map((rule) => rule.id.toLowerCase()));
+    const opened = await this.scan('TriggerOpened');
+    const open: OpenTriggerRecord[] = [];
+    for (const event of opened) {
+      const { triggerId, user, assetId, p0, t0 } = event.args;
+      if (triggerId === undefined || !user || !assetId || p0 === undefined || t0 === undefined) continue;
+      const asset = this.assetKey(assetId);
+      if (!asset || !users.has(user.toLowerCase())) continue;
+      const trigger = await publicClient.readContract({ address, abi: vaultAbi, functionName: 'getTrigger', args: [triggerId] });
+      if (trigger.status === TRIGGER_OPEN) open.push({ triggerId: triggerId.toString(), ruleId: user, asset, p0, t0: Number(t0) });
+    }
+    return open;
   }
 
   private async loadPosition(id: string, users?: Set<string>) {
@@ -217,10 +302,27 @@ export class ViemVault implements VaultPort {
     });
   }
 
+  // A dropped transaction must not hang the agent: viem's own timeout, and a timer of ours in case the client never answers
+  private async waitForReceipt(hash: Hash) {
+    const { publicClient, txTimeoutMs = 90_000 } = this.options;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new TxTimeout(hash, txTimeoutMs)), txTimeoutMs);
+    });
+    try {
+      return await Promise.race([publicClient.waitForTransactionReceipt({ hash, timeout: txTimeoutMs }), timeout]);
+    } catch (error) {
+      if (error instanceof WaitForTransactionReceiptTimeoutError) throw new TxTimeout(hash, txTimeoutMs);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private async send(
     functionName: 'openTrigger' | 'confirmTrigger' | 'expireTrigger' | 'sell',
     args: readonly unknown[]
-  ): Promise<{ hash: Hash; logs: Log[] }> {
+  ): Promise<{ hash: Hash; logs: Log[]; gasWei?: bigint }> {
     const { publicClient, walletClient, address } = this.options;
     try {
       const { request } = await publicClient.simulateContract({
@@ -230,12 +332,18 @@ export class ViemVault implements VaultPort {
         args: args as never,
         account: walletClient.account,
       });
-      const hash = await walletClient.writeContract(request as never);
-      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      // The request's ABI holds only this function; the whole ABI names a revert that first shows up at send time
+      const hash = await walletClient.writeContract({ ...request, abi: vaultAbi } as never);
+      const receipt = await this.waitForReceipt(hash);
       if (receipt.status !== 'success') throw new VaultRejection('Reverted', hash);
-      return { hash, logs: receipt.logs };
+      const { gasUsed, effectiveGasPrice } = receipt;
+      return {
+        hash,
+        logs: receipt.logs,
+        ...(gasUsed !== undefined && effectiveGasPrice !== undefined ? { gasWei: gasUsed * effectiveGasPrice } : {}),
+      };
     } catch (error) {
-      if (error instanceof VaultRejection) throw error;
+      if (error instanceof VaultRejection || error instanceof TxTimeout) throw error;
       // Only a revert is the vault saying no; any other failure passes through, so the caller can try again
       const name = revertName(error);
       if (name) throw new VaultRejection(name);
@@ -244,34 +352,35 @@ export class ViemVault implements VaultPort {
   }
 
   async openTrigger({ ruleId, asset, post, p0 }: OpenTriggerInput): Promise<OpenedTrigger> {
-    const { hash, logs } = await this.send('openTrigger', [
+    const { hash, logs, gasWei } = await this.send('openTrigger', [
       ruleId,
       assetIdOf(asset),
       toVaultResponse(post),
       toVaultResponse(p0),
     ]);
-    return { triggerId: readEvent(logs, 'TriggerOpened').args.triggerId.toString(), txHash: hash };
+    return { triggerId: readEvent(logs, 'TriggerOpened').args.triggerId.toString(), txHash: hash, gasWei };
   }
 
   async confirmTrigger(triggerId: string, p1: SignedResponse): Promise<Bought> {
-    const { hash, logs } = await this.send('confirmTrigger', [BigInt(triggerId), toVaultResponse(p1)]);
+    const { hash, logs, gasWei } = await this.send('confirmTrigger', [BigInt(triggerId), toVaultResponse(p1)]);
     const { args } = readEvent(logs, 'TriggerConfirmed');
     const positionId = args.positionId.toString();
     await this.loadPosition(positionId);
-    return { triggerId, positionId, usdcIn: args.quoteIn, assetOut: args.assetOut, price: args.p1, txHash: hash };
+    return { triggerId, positionId, usdcIn: args.quoteIn, assetOut: args.assetOut, price: args.p1, txHash: hash, gasWei };
   }
 
-  async expireTrigger(triggerId: string): Promise<void> {
-    await this.send('expireTrigger', [BigInt(triggerId)]);
+  async expireTrigger(triggerId: string): Promise<Expired> {
+    const { hash, gasWei } = await this.send('expireTrigger', [BigInt(triggerId)]);
+    return { txHash: hash, gasWei };
   }
 
   async sell(positionId: string, kind: SellKind, price: SignedResponse): Promise<Sold> {
     const reason = SELL_REASONS[kind];
     if (reason === undefined) throw new VaultRejection('SellKindNotSupported', kind);
-    const { hash, logs } = await this.send('sell', [BigInt(positionId), reason, toVaultResponse(price)]);
+    const { hash, logs, gasWei } = await this.send('sell', [BigInt(positionId), reason, toVaultResponse(price)]);
     const { args } = readEvent(logs, 'PositionSold');
     const position = this.positions.get(positionId);
     if (position) position.open = false;
-    return { positionId, usdcOut: args.quoteOut, price: args.price, txHash: hash };
+    return { positionId, usdcOut: args.quoteOut, price: args.price, txHash: hash, gasWei };
   }
 }

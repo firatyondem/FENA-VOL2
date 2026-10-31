@@ -1,7 +1,7 @@
 // The agent's view of the vault. The vault decides; the agent only brings it signed proof. Everything the agent needs
 // from Person A's IVault goes through this one interface: the in-memory SimVault for tests and the stage replay, and
 // ViemVault for the deployed contract.
-import type { Address, Hex } from 'viem';
+import { type Address, formatEther, type Hex } from 'viem';
 import type { SignedResponse } from '../airnode/attestation.ts';
 
 // IVault.AssetRule, in seconds and basis points, for one asset of a rule
@@ -50,18 +50,40 @@ export interface OpenTriggerInput {
   p0: SignedResponse;
 }
 
-export interface OpenedTrigger {
-  triggerId: string;
+// What a mined transaction cost the agent wallet: gasUsed * effectiveGasPrice, in wei
+export interface TransactionCost {
   txHash?: Hex;
+  gasWei?: bigint;
 }
 
-export interface Bought {
+export interface OpenedTrigger extends TransactionCost {
+  triggerId: string;
+}
+
+export interface Bought extends TransactionCost {
   triggerId: string;
   positionId: string;
   usdcIn: bigint;
   assetOut: bigint;
   price: bigint;
-  txHash?: Hex;
+}
+
+export type Expired = TransactionCost;
+
+// The event fields for a transaction: its hash and its gas in ETH, when the vault reports them
+export const transactionFields = (cost: TransactionCost | void) => ({
+  ...(cost?.txHash ? { txHash: cost.txHash } : {}),
+  ...(cost?.gasWei === undefined ? {} : { gasEth: formatEther(cost.gasWei) }),
+});
+
+// An open trigger as the vault stores it: what Gate 2 needs to pick it up again after a restart
+export interface OpenTriggerRecord {
+  triggerId: string;
+  ruleId: string;
+  asset: string;
+  // P0's price, with 18 decimals, and the time at which the source took it, in seconds
+  p0: bigint;
+  t0: number;
 }
 
 export type SellKind = 'manual' | 'take-profit' | 'stagnation' | 'stop-loss';
@@ -77,11 +99,10 @@ export interface Position {
   open: boolean;
 }
 
-export interface Sold {
+export interface Sold extends TransactionCost {
   positionId: string;
   usdcOut: bigint;
   price: bigint;
-  txHash?: Hex;
 }
 
 // A revert, with the vault's custom error name as `reason` so the console can say which check stopped it.
@@ -95,6 +116,18 @@ export class VaultRejection extends Error {
   }
 }
 
+// A transaction that was sent but not mined in time. It is not the vault saying no, so the caller tries again on a later
+// cycle; the hash says where to look, because it may still land.
+export class TxTimeout extends Error {
+  readonly hash: Hex;
+
+  constructor(hash: Hex, timeoutMs: number) {
+    super(`Transaction ${hash} was not mined within ${Math.round(timeoutMs / 1000)} s; it may still land`);
+    this.name = 'TxTimeout';
+    this.hash = hash;
+  }
+}
+
 export interface VaultPort {
   readonly kind: 'simulated' | 'onchain';
   // The sells the keeper may submit: the vault lets anyone take profit or exit stagnation, only the owner sell by hand
@@ -102,7 +135,9 @@ export interface VaultPort {
   listRules(): Promise<Rule[]>;
   openTrigger(input: OpenTriggerInput): Promise<OpenedTrigger>;
   confirmTrigger(triggerId: string, p1: SignedResponse): Promise<Bought>;
-  expireTrigger(triggerId: string): Promise<void>;
+  expireTrigger(triggerId: string): Promise<Expired | void>;
   listPositions(): Promise<Position[]>;
+  // The open triggers of this agent's users, so a restart forgets none
+  listOpenTriggers?(): Promise<OpenTriggerRecord[]>;
   sell(positionId: string, kind: SellKind, price: SignedResponse): Promise<Sold>;
 }

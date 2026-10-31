@@ -61,7 +61,7 @@ test('the watchlist links each account to assets that have profiles', () => {
   const watchlist = readSharedJson<{ handle: string; assets: string[] }[]>('../agent/config/watchlist.json');
   assert.deepEqual(
     watchlist.map((account) => account.handle),
-    ['realDonaldTrump', 'elonmusk', 'JDVance', 'marcorubio']
+    ['realDonaldTrump', 'elonmusk', 'JDVance', 'marcorubio', 'fenahackdemo']
   );
   for (const account of watchlist) for (const asset of account.assets) assert.ok(profiles.assets[asset], asset);
 });

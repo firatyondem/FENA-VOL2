@@ -1,15 +1,16 @@
 // The spec's four tamper tests, built from real signed Nodary responses so the deployed vault faces genuine data:
 // an edited value, a stale response, a valid response for another asset, and data signed with our own key.
+import { readFileSync } from 'node:fs';
 import type { SignedResponse } from '../src/airnode/attestation.ts';
 import { signResponse } from '../src/airnode/sign.ts';
+import type { TamperCase } from '../src/console/server.ts';
 import { ATTACKER_KEY } from './fixture-set.ts';
 
-export interface TamperCase {
-  name: string;
-  how: string;
-  expected: string;
-  response: SignedResponse;
-}
+export type { TamperCase };
+
+// A genuine Nodary signature from long ago, past the vault's age limit
+export const readStaleEth = () =>
+  JSON.parse(readFileSync(new URL('../../shared/fixtures/nodary-eth-usd.json', import.meta.url), 'utf8')) as SignedResponse;
 
 export const buildTamperSet = async (
   freshEth: SignedResponse,
@@ -41,3 +42,16 @@ export const buildTamperSet = async (
     response: await signResponse(ATTACKER_KEY, freshEth.requestHash, Number(freshEth.timestamp), freshEth.data),
   },
 ];
+
+// The judges' sequence: first the real response, which the vault must accept, then the four forgeries of it
+export const buildJudgeSet = async (
+  freshEth: SignedResponse,
+  freshBtc: SignedResponse,
+  staleEth: SignedResponse
+): Promise<TamperCase[]> => [
+  { name: 'Real, fresh response', how: 'A fresh signed ETH/USD response, unchanged', expected: 'accepted', response: freshEth },
+  ...(await buildTamperSet(freshEth, freshBtc, staleEth)),
+];
+
+export const fetchJudgeSet = async (fetchPrice: (asset: string) => Promise<SignedResponse>) =>
+  buildJudgeSet(await fetchPrice('ETH'), await fetchPrice('BTC'), readStaleEth());

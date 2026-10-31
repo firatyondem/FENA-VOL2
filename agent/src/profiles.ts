@@ -101,6 +101,10 @@ export interface SignedPrice {
   response: SignedResponse;
 }
 
+// What the gates need of a price: the value and when the source took it. A trigger restored after a restart has only
+// these, read from the vault.
+export type PricePoint = Pick<SignedPrice, 'price' | 'sourceTime'>;
+
 export const readSignedPrice = (profiles: Profiles, asset: AssetProfile, response: SignedResponse): SignedPrice => {
   const price = readUint(response.data, 'price', profiles.priceDecimals);
   const rawTime = readUint(response.data, asset.price.timeField, 0);

@@ -27,6 +27,7 @@ const ACCOUNTS = [
   { handle: "elonmusk",        name: "Elon Musk",    role: "Tesla / X owner",      assets: ["DOGE", "TSLA"] },
   { handle: "JDVance",         name: "JD Vance",     role: "Vice President",       assets: ["BTC", "OIL"] },
   { handle: "marcorubio",      name: "Marco Rubio",  role: "Secretary of State",   assets: ["OIL"] },
+  { handle: "fenahackdemo",    name: "FENA demo",    role: "Our demo account",     assets: ["ETH", "BTC", "DOGE"] },
 ];
 
 // Suggested topics per asset (spec "Topic -> asset map"). Users can edit them.
@@ -38,9 +39,17 @@ const TOPICS = {
   TSLA: ["Tesla", "EV tax credits", "auto tariffs on China", "self-driving rules", "Musk-Trump disputes"],
 };
 
-// Fill these in once the contracts are deployed (spec: Base Sepolia is the likely testnet)
-const CHAIN = {
-  network: "Base Sepolia",
-  vaultAddress: "",   // TODO: deployed vault contract
-  usdcAddress: "",    // TODO: mock USDC token
+// ===== Live mode =====
+// "practice" runs js/mock.js in the browser; "live" talks to the deployed vault. ?mode=live or ?mode=practice overrides.
+const DEFAULT_MODE = "practice";
+// The network live mode reads before a wallet connects. ?chain=84532 overrides.
+const DEFAULT_CHAIN_ID = 31337;
+
+// Contract addresses come from shared/deployments/<chain id>.json. Only public addresses here, never keys.
+// agent: the agent's wallet, which a saved rule names as the only one that may open triggers.
+const NETWORKS = {
+  31337: { name: "Anvil (local)", rpc: "http://127.0.0.1:8545", agent: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+           agentConsole: "http://127.0.0.1:4173", explorer: null, pollMs: 2000 },
+  84532: { name: "Base Sepolia", rpc: "https://sepolia.base.org", agent: "" /* set at go-live */,
+           agentConsole: "http://127.0.0.1:4173", explorer: "https://sepolia.basescan.org", pollMs: 5000 },
 };

@@ -19,10 +19,13 @@
   <header class="top">
     <div class="logo"><span class="logo-mark"></span>SIGNAL VAULT</div>
     <div class="top-right">
-      <span class="chip" title="No blockchain yet: practice money and a practice contract"><span class="dot warn"></span>practice mode</span>
+      <span class="chip" id="modeChip" title="No blockchain yet: practice money and a practice contract"><span class="dot warn" id="modeDot"></span><span id="modeText">practice mode</span></span>
       <button class="chip" id="profileChip" title="Your profile"><span class="avatar" id="avatarSmall">?</span><span id="profileChipName">log in</span></button>
     </div>
   </header>
+
+  <!-- ===== Live mode: load and wallet problems ===== -->
+  <div class="banner hidden" id="liveBanner" role="alert"></div>
 
   <!-- ===== Hero ===== -->
   <section class="hero">
@@ -107,13 +110,20 @@
 
     <!-- ===== MONEY ===== -->
     <section class="panel hidden" id="tab-money">
-      <div class="explain">Money <b>in the vault</b> is what your rule may invest. Only you can put money in or take it out. Practice mode uses play money (mUSDC).</div>
+      <div class="explain">Money <b>in the vault</b> is what your rule may invest. Only you can put money in or take it out. <span class="practice-only">Practice mode uses play money (mUSDC).</span><span class="live-only hidden">Live mode uses mUSDC, a test token on the vault's network.</span></div>
       <div class="grid2 even">
         <div class="card">
           <h2>Deposit</h2>
           <p class="muted small">Add money to your vault so your rule can invest it.</p>
+          <div class="live-only hidden">
+            <div class="eyebrow" style="margin-top:14px">in your wallet</div>
+            <div class="kpi" id="walletUsdc">–</div>
+            <div class="buttons" style="margin-top:8px"><button class="btn small" id="faucetBtn">Get 10,000 test mUSDC</button></div>
+            <span class="muted small">mUSDC is a free testnet token; anyone may mint it.</span>
+          </div>
           <div class="field"><label for="depositInput">amount in mUSDC</label><input type="number" id="depositInput" min="0" placeholder="e.g. 1000"></div>
           <div class="buttons" style="margin-top:14px"><button class="btn primary" id="depositBtn">Deposit</button></div>
+          <div class="muted small" id="depositStatus" role="status"></div>
           <div class="error" id="depositError"></div>
         </div>
         <div class="card">
@@ -127,6 +137,7 @@
             <button class="btn" id="withdrawBtn">Withdraw</button>
             <button class="btn danger" id="withdrawAllBtn">Withdraw everything</button>
           </div>
+          <div class="muted small" id="withdrawStatus" role="status"></div>
           <div class="error" id="withdrawError"></div>
         </div>
       </div>
@@ -141,9 +152,9 @@
       <div class="card">
         <div class="cond-head">
           <h2>Live feed</h2>
-          <label class="toggle small" style="margin:0"><input type="checkbox" id="forceOpen" checked> pretend markets are open (practice only)</label>
+          <label class="toggle small practice-only" style="margin:0"><input type="checkbox" id="forceOpen" checked> pretend markets are open (practice only)</label>
         </div>
-        <p class="muted" style="margin-top:0">In the real app, an <b style="color:var(--text)">AI agent</b> reads every new post from the people you watch, decides whether it's about one of your assets, and brings signed prices to the contract. <b style="color:var(--text)">In practice mode</b> you play example posts yourself (they're scripted, not real quotes) to see what happens step by step.</p>
+        <p class="muted" style="margin-top:0">In the real app, an <b style="color:var(--text)">AI agent</b> reads every new post from the people you watch, decides whether it's about one of your assets, and brings signed prices to the contract. <span class="practice-only"><b style="color:var(--text)">In practice mode</b> you play example posts yourself (they're scripted, not real quotes) to see what happens step by step.</span><span class="live-only hidden">Everything below is read from the vault's events: each price check, purchase and sale is a transaction you can look up.</span></p>
         <div class="pipeline" id="pipeline"></div>
         <div class="next-step" id="nextStep" role="status"></div>
       </div>
@@ -161,7 +172,7 @@
         </div>
         <div class="card">
           <h2>Latest results</h2>
-          <p class="muted small" style="margin-top:-8px">Invested or blocked, and why.</p>
+          <p class="muted small" style="margin-top:-8px"><span class="practice-only">Invested or blocked, and why.</span><span class="live-only hidden">Invested, sold or expired.</span></p>
           <div class="feed" id="feedResults"><p class="muted small">Nothing yet.</p></div>
           <p><button class="link small" data-goto="history">See everything in History →</button></p>
         </div>
@@ -182,8 +193,8 @@
         <div id="investments"><p class="muted">Nothing invested yet.</p></div>
       </div>
       <div class="card" style="margin-top:16px">
-        <h2>Blocked by the contract</h2>
-        <p class="muted small" style="margin-top:-8px">Every attempt the safety checks stopped. No money moved.</p>
+        <h2><span class="practice-only">Blocked by the contract</span><span class="live-only hidden">Expired price checks</span></h2>
+        <p class="muted small" style="margin-top:-8px"><span class="practice-only">Every attempt the safety checks stopped. No money moved.</span><span class="live-only hidden">Posts whose price never confirmed in time. No money moved.</span></p>
         <div class="feed" id="blockedList"><p class="muted small">Nothing blocked yet.</p></div>
       </div>
     </section>
@@ -234,6 +245,8 @@
     <!-- ===== FOR JUDGES: TAMPER TEST (reached from the footer) ===== -->
     <section class="panel hidden" id="tab-tamper">
       <div class="explain"><b>For judges.</b> This page proves the contract can't be tricked. Each button sends signed price data to the contract: the first is real and fresh and must be accepted; the others are faked in one way each and must be blocked before any money moves. You can also paste your own signed response.</div>
+      <div class="explain practice-only"><b>Practice mode: this tab is a simulation.</b> It runs the practice model of the contract in your browser. Open live mode to test the deployed vault.</div>
+      <div class="explain live-only hidden"><b>This tab asks the deployed vault.</b> Every result below comes from its read-only <code>checkPrice</code>, the same check each buy and sell runs. It needs no wallet and no gas, and nothing can move. The buttons take a fresh signed response from the agent's console; a pasted response goes straight to the vault. <code>npm run tamper-demo</code> in <code>agent/</code> does the same from a terminal. The replay check belongs to a buy, so <code>forge test</code> in <code>contracts/</code> covers it.</div>
       <div class="card">
         <div class="buttons" id="tamperButtons">
           <button class="btn primary" data-kind="valid">Real, fresh response</button>
@@ -241,7 +254,7 @@
           <button class="btn" data-kind="stale">2 · Too old</button>
           <button class="btn" data-kind="wrongRequest">3 · Different request</button>
           <button class="btn" data-kind="wrongSigner">4 · Wrong signer</button>
-          <button class="btn" data-kind="replay">Same response twice</button>
+          <button class="btn practice-only" data-kind="replay">Same response twice</button>
         </div>
       </div>
       <div class="grid2 even" style="margin-top:16px">
@@ -250,6 +263,11 @@
           <pre class="code" id="tamperJson">Click a button above.</pre>
           <p class="muted small">Paste your own signed response:</p>
           <textarea id="judgeJson" placeholder='{"requestHash":"0x…","timestamp":1793000000,"data":{"price":3400},"signature":"0x…"}'></textarea>
+          <label class="muted small live-only hidden" style="display:block;margin-top:10px">Check it as the price of
+            <select id="judgeAsset">
+              <option>ETH</option><option>BTC</option><option>DOGE</option><option>OIL</option><option>TSLA</option>
+            </select>
+          </label>
           <button class="btn" id="judgeSubmitBtn" style="margin-top:10px">Submit pasted response</button>
         </div>
         <div class="card">
@@ -311,13 +329,25 @@
       <button class="btn primary" style="width:100%;margin-top:18px">Create account</button>
       <p class="muted small" style="margin-bottom:0">You must be 18 or older.</p>
     </form>
-    <p class="muted small" style="margin-bottom:0">Practice login: accounts are stored in this browser only.
+    <div id="walletLogin" class="hidden">
+      <p class="muted" style="margin-top:0">Live mode: your wallet is your account. Connect it to deposit, save your rule and follow your investments on-chain.</p>
+      <button class="btn primary" id="connectBtn" type="button" style="width:100%">Connect wallet</button>
+      <div class="error" id="connectError"></div>
+      <p class="muted small" style="margin-bottom:0"><button class="link small" data-goto="tamper" type="button">For judges: test the vault without a wallet →</button></p>
+    </div>
+    <p class="muted small" style="margin-bottom:0"><span id="practiceNote">Practice login: accounts are stored in this browser only.</span>
       <button class="link small" id="browseBtn" type="button">Look around first</button></p>
   </div>
 </div>
 
+<!-- ===== Live mode: transaction notices ===== -->
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script src="vendor/ethers.umd.min.js"></script>
 <script src="js/config.js"></script>
 <script src="js/mock.js"></script>
+<script src="js/units.js"></script>
+<script src="js/chain.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

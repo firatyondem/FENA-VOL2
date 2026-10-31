@@ -5,12 +5,15 @@ import type { Address, Hex } from 'viem';
 import { AttestationError, deriveRequestHash, type SignedResponse, verifySignedResponse } from '../airnode/attestation.ts';
 import { readUint } from '../airnode/projected-json.ts';
 import { checkTrend, type GateFailure } from '../engine/gates.ts';
+import { takeProfitTarget } from '../engine/keeper.ts';
 import { getAsset, priceRequest, type Profiles, readSignedPrice } from '../profiles.ts';
 import { latestTweetRequest, snowflakeTime } from '../sources/twitter.ts';
 import {
   type Bought,
+  type Expired,
   type OpenedTrigger,
   type OpenTriggerInput,
+  type OpenTriggerRecord,
   type Position,
   type Rule,
   type RuleAsset,
@@ -209,7 +212,7 @@ export class SimVault implements VaultPort {
     if (rule.paused) throw new VaultRejection('RuleIsPaused');
     const asset = this.ruleAsset(rule, trigger.asset);
     const { price: p1, key } = await this.verifyPrice(rule.id, trigger.asset, p1Response);
-    const trend = checkTrend({ ...p1, price: trigger.p0, sourceTime: trigger.t0 }, p1, asset);
+    const trend = checkTrend({ price: trigger.p0, sourceTime: trigger.t0 }, p1, asset);
     if (!trend.ok) throw new VaultRejection(GATE_ERRORS[trend.reason]);
     // spend() throws before it changes anything, so nothing is recorded for a refused buy
     const usdcIn = this.spend(rule, asset);
@@ -231,7 +234,14 @@ export class SimVault implements VaultPort {
     return { triggerId, positionId, usdcIn, assetOut, price: p1.price };
   }
 
-  async expireTrigger(triggerId: string): Promise<void> {
+  async listOpenTriggers(): Promise<OpenTriggerRecord[]> {
+    return [...this.triggers.values()]
+      .filter((trigger) => trigger.status === 'open')
+      .map(({ id, ruleId, asset, p0, t0 }) => ({ triggerId: id, ruleId, asset, p0, t0 }));
+  }
+
+  // Nothing is mined in memory, so there is no hash or gas to report
+  async expireTrigger(triggerId: string): Promise<Expired | void> {
     const trigger = this.triggers.get(triggerId);
     if (!trigger || trigger.status !== 'open') throw new VaultRejection('TriggerNotOpen', triggerId);
     const asset = this.ruleAsset(this.rule(trigger.ruleId), trigger.asset);
@@ -250,7 +260,7 @@ export class SimVault implements VaultPort {
     if (sourceTime < position.entryTime) throw new VaultRejection('PriceBeforeBuy');
     const entry = position.entryPrice;
     if (kind === 'take-profit') {
-      const target = asset.takeProfitBps === 0 ? undefined : (entry * (BPS + BigInt(asset.takeProfitBps))) / BPS;
+      const target = asset.takeProfitBps === 0 ? undefined : takeProfitTarget(entry, asset.takeProfitBps);
       if (target === undefined || p < target) throw new VaultRejection('TakeProfitNotReached');
     } else if (kind === 'stagnation') {
       if (asset.stagnationAfterSec === 0 || sourceTime < position.entryTime + asset.stagnationAfterSec) {

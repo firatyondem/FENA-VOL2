@@ -31,8 +31,10 @@ the keyword baseline; the Ðogecoin post shows the difference.
 From `contracts/`, after `npm run request-hashes` in `agent/`:
 
 ```sh
-forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast   # PRIVATE_KEY in the environment
+forge script Deploy --rpc-url $RPC_URL --broadcast   # PRIVATE_KEY in the environment
 ```
+
+Git Bash on Windows rewrites a `script/Deploy.s.sol` argument and forge refuses it, so name the contract instead.
 
 `Deploy.s.sol` deploys mock USDC, the mock DEX, tOIL, tDOGE, tETH, tBTC, tTSLA and the `Vault`, registers every asset
 profile (asset id `keccak256("OIL")`, its price Airnode and request hash, the spec's limits with a 2-minute demo wait)
@@ -56,8 +58,10 @@ assets, limits, watched accounts and topics. It finds open positions from `Trigg
 | `npm run request-hashes` | Writes the hashes the deploy registers to `shared/deployments/request-hashes.json` |
 | `npm run export-abi` | Copies the compiled ABIs for the agent and the frontend |
 | `npm run set-rule` | Funds a user and sets their rule (`USER_PRIVATE_KEY`, `AGENT_PRIVATE_KEY`) |
+| `npm run add-account -- <handle>` | Registers an account from `config/watchlist.json` on the deployed vault, after `npm run request-hashes` (`OWNER_PRIVATE_KEY`, the deployer's key) |
 | `npm run fetch-prices -- ETH OIL --save` | Fetches and verifies live signed prices |
-| `npm run tamper-demo` | The four forgeries against the deployed vault (`TRIGGER_ID`) or the in-memory vault |
+| `npm run tamper-demo` | A fresh real response and its four forgeries, judged by the deployed vault's `checkPrice`: no wallet, no gas. With `TRIGGER_ID` and `AGENT_PRIVATE_KEY` they go to that open ETH trigger instead; without `RPC_URL` or a deployment, to the in-memory vault |
+| `npm run tamper-demo -- --response my.json --asset ETH` | Your own signed response, judged the same way |
 | `npm run typecheck` | `tsc` over sources, scripts and tests |
 
 ## How it handles failure
@@ -77,8 +81,7 @@ assets, limits, watched accounts and topics. It finds open positions from `Trigg
 
 ## Still open
 
-- Deploying to Base Sepolia needs a funded deployer key (testnet ETH).
-- One paid call per account and per TickerLayer asset (needs `PAYER_PRIVATE_KEY` with aUSD) to confirm the handles and
-  pinned-tweet flags in `config/watchlist.json` and the unit of TickerLayer's `lastTrade.timestamp` (assumed ms);
-  `npm run fetch-prices -- OIL TSLA --save` keeps the responses.
+- One paid call per account and per TSLA (needs `PAYER_PRIVATE_KEY` with aUSD) to confirm the handles and pinned-tweet
+  flags in `config/watchlist.json` and that TSLA's `lastTrade.timestamp` is in ms, as a saved OIL response is;
+  `npm run fetch-prices -- TSLA --save` keeps the response.
 - The deployed vault has no stop loss; the keeper only offers take profit and the stagnation exit on-chain.
