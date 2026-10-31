@@ -1418,6 +1418,22 @@ export const vaultAbi = [
   },
   {
     "type": "error",
+    "name": "DexDeliveredLess",
+    "inputs": [
+      {
+        "name": "promised",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "delivered",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "ECDSAInvalidSignature",
     "inputs": []
   },
