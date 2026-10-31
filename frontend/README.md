@@ -41,10 +41,11 @@ What live mode shows:
   open position is valued at the last price the vault verified, with its age; the page never makes up a price. "Sell
   now" fetches a signed price from the agent's console, shows it, and sells at it on a second click. Without a price
   source it stays disabled: the keeper sells at take profit or after the stagnation delay.
-- **Tamper test** asks the deployed vault's read-only `checkPrice`: no wallet, no gas, no open price check, and nothing
-  can move. The buttons take a fresh response and its forgeries from the agent's console (`/api/tamper-set`, while the
-  agent runs live); a pasted response goes straight to the vault. In practice mode the tab stays a browser simulation
-  and says so.
+- **Tamper test** asks the deployed vault's read-only `checkPrice`: no wallet, no gas, no agent, no open price check,
+  and nothing can move. The buttons fetch a fresh signed price from Nodary and build each forgery in the browser; a
+  pasted response goes straight to the vault. In practice mode the tab stays a browser simulation and says so.
+- **Live on the vault**, on the same tab, lists every rule, price check, buy and sale from the chain with its
+  transaction, for anyone. Add `#judges` to the URL to open this tab directly.
 
 Every transaction is simulated first, so a refusal shows the vault's reason (for example "the response is too old")
 before the wallet asks for anything.

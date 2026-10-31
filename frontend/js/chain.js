@@ -196,12 +196,47 @@ const Chain = {
     }
   },
 
+  // A fresh signed price straight from Nodary: free, and it needs neither a wallet nor the agent
+  async fetchSignedPrice(asset) {
+    const response = await fetch(NODARY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(this.requestHashes.prices[asset].request),
+    });
+    if (!response.ok) throw new Error(`Nodary answered ${response.status}`);
+    return response.json();
+  },
+
+  // One button of the tamper test: a real fresh ETH response, or one forgery of it built here in the browser
+  async tamperCase(kind) {
+    if (kind === "stale") {
+      const response = await fetch("../shared/fixtures/nodary-eth-usd.json", { cache: "no-store" });
+      if (!response.ok) throw new Error("the old signed response is missing");
+      return response.json();
+    }
+    if (kind === "wrongRequest") return this.fetchSignedPrice("BTC");
+    const real = await this.fetchSignedPrice("ETH");
+    if (kind === "edited") return { ...real, data: real.data.replace(/"price":([\d.]+)/, (_, price) => `"price":${Number(price) * 2}`) };
+    if (kind === "wrongSigner") {
+      // The real data, signed the way an Airnode signs, by a key made just now
+      const digest = ethers.solidityPackedKeccak256(["bytes32", "uint256", "bytes"], [real.requestHash, real.timestamp, ethers.toUtf8Bytes(real.data)]);
+      return { ...real, signature: await ethers.Wallet.createRandom().signMessage(ethers.getBytes(digest)) };
+    }
+    return real;
+  },
+
+  // Two readers can poll at once, so they share one scan: the same log must not be stored twice
+  scanLogs() {
+    this.scanning ??= this.scanNewLogs().finally(() => { this.scanning = null; });
+    return this.scanning;
+  },
+
   // Reads every vault event since the deployment, in chunks the RPC accepts, and only new blocks after that
-  async scanLogs() {
+  async scanNewLogs() {
     const provider = this.read.provider, vault = this.read.vault;
     const latest = await provider.getBlockNumber();
-    let from = this.scannedTo === null ? Number(this.deployment.deployedAtBlock || 0) : this.scannedTo + 1;
-    let chunk = LOG_CHUNK;
+    let from = this.scannedTo === null ? Number(this.deployment.scanFromBlock ?? this.deployment.deployedAtBlock ?? 0) : this.scannedTo + 1;
+    let chunk = this.network.logChunk ?? LOG_CHUNK;
     while (from <= latest) {
       const to = Math.min(latest, from + chunk - 1);
       let raw;

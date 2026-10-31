@@ -237,6 +237,7 @@ function showTab(name) {
   if (name === "tamper") {
     closeLogin();
     window.scrollTo({ top: $("tab-tamper").offsetTop - 20, behavior: "smooth" });
+    refreshVaultActivity();
   }
 }
 document.querySelectorAll(".tabs .tab").forEach(t => t.onclick = () => showTab(t.dataset.tab));
@@ -1251,8 +1252,6 @@ $("tab-history").onclick = e => {
 // Tamper test (for judges, reached from the footer)
 // =========================================================
 const HIGHLIGHT = { edited: "price", stale: "timestamp", wrongRequest: "requestHash", wrongSigner: "signature" };
-// Each button's case in the agent's tamper set (live mode)
-const TAMPER_CASES = { valid: "Real, fresh response", edited: "Edited value", stale: "Stale response", wrongRequest: "Different request", wrongSigner: "Wrong signer" };
 let firstTamper = true;
 function showResponse(r, kind) {
   // A real response holds its price inside the signed data
@@ -1282,17 +1281,6 @@ async function checkOnVault(r, label, asset) {
     else addTamperResult(`<span class="badge">not checked</span> ${esc(label)}: this never got a verdict from the vault (${esc(err.shortMessage || err.message)}).`);
   }
 }
-async function fetchTamperCase(kind) {
-  let res;
-  try {
-    res = await fetch(`${NETWORKS[Chain.chainId].agentConsole}/api/tamper-set?asset=ETH`);
-  } catch {
-    throw new Error("the agent's console can't be reached, so there's no fresh response to test. Start the agent in live mode, or paste a response below: that goes straight to the vault");
-  }
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `the agent's console answered ${res.status}`);
-  return body.cases.find(c => c.name === TAMPER_CASES[kind]);
-}
 document.querySelectorAll("#tamperButtons .btn").forEach(btn => btn.onclick = async () => {
   const kind = btn.dataset.kind;
   if (!isLive) {
@@ -1301,7 +1289,8 @@ document.querySelectorAll("#tamperButtons .btn").forEach(btn => btn.onclick = as
     return submitResponse(r, btn.textContent);
   }
   try {
-    const { response } = await fetchTamperCase(kind);
+    await live.loading;
+    const response = await Chain.tamperCase(kind);
     showResponse(response, kind);
     await checkOnVault(response, btn.textContent, "ETH");
   } catch (err) {
@@ -1479,6 +1468,57 @@ function renderLiveFeeds() {
   if (!$("tab-history").classList.contains("hidden")) renderHistory();
 }
 
+// Everything every user's agent did on the vault, newest first, for anyone: it reads the chain, with no wallet and no agent
+async function vaultStory() {
+  const assets = new Map(), lines = [];
+  const counts = { checks: 0, buys: 0, sales: 0 };
+  for (const { name, args: a, blockNumber, txHash } of Chain.logs) {
+    let html = null;
+    if (name === "RuleSet") {
+      html = `<span class="badge info">rule</span> ${esc(shortAddress(a.user))} saved a rule that names the agent ${esc(shortAddress(a.rule.agent))}.`;
+    } else if (name === "TriggerOpened") {
+      const key = Chain.assetOfId[String(a.assetId).toLowerCase()];
+      assets.set(String(a.triggerId), key);
+      counts.checks++;
+      html = `<span class="badge info">price check</span> Check ${esc(a.triggerId)} opened for ${esc(token(key))}: <a href="https://x.com/i/status/${esc(a.tweetId)}" target="_blank" rel="noopener">a signed post</a> and a signed starting price of ${fmtPrice(Units.priceFromWei(a.p0))}.`;
+    } else if (name === "TriggerConfirmed") {
+      counts.buys++;
+      html = `<span class="badge ok">bought</span> Check ${esc(a.triggerId)} passed: the vault bought ${esc(token(assets.get(String(a.triggerId))))} at the signed price ${fmtPrice(Units.priceFromWei(a.p1))} for ${fmtPrice(Units.unitsToUsdc(a.quoteIn))} mUSDC.`;
+    } else if (name === "TriggerExpired") {
+      html = `<span class="badge warn">expired</span> Check ${esc(a.triggerId)} closed: the signed price never confirmed the move, so nothing was bought.`;
+    } else if (name === "PositionSold") {
+      counts.sales++;
+      html = `<span class="badge ok">sold</span> Position ${esc(a.positionId)} sold (${esc(SELL_REASON[Number(a.reason)])}) at the signed price ${fmtPrice(Units.priceFromWei(a.price))} for ${fmtPrice(Units.unitsToUsdc(a.quoteOut))} mUSDC.`;
+    }
+    if (html) lines.push({ html, blockNumber, txHash });
+  }
+  const recent = lines.slice(-30).reverse();
+  const items = await Promise.all(recent.map(async ({ html, blockNumber, txHash }) => {
+    const url = Chain.explorerTx(txHash);
+    const proof = url ? ` <a class="small" href="${esc(url)}" target="_blank" rel="noopener">transaction</a>` : "";
+    return `<div class="item"><div class="meta">${clock(await Chain.blockTime(blockNumber) * 1000)}</div>${html}${proof}</div>`;
+  }));
+  return { counts, items };
+}
+let vaultActivityShown = "", readingVault = false;
+async function refreshVaultActivity() {
+  if (!isLive || readingVault || $("tab-tamper").classList.contains("hidden")) return;
+  readingVault = true;
+  try {
+    await live.loading;
+    if (!live.ready) return;
+    await Chain.scanLogs();
+    const { counts, items } = await vaultStory();
+    $("vaultCounts").textContent = `${counts.checks} price checks · ${counts.buys} buys · ${counts.sales} sales`;
+    const html = items.join("") || '<p class="muted small">Nothing yet. A price check appears here as soon as a watched account posts something that matters.</p>';
+    if (html !== vaultActivityShown) $("vaultActivity").innerHTML = vaultActivityShown = html;
+  } catch (err) {
+    $("vaultCounts").textContent = `Can't read the chain right now (${err.shortMessage || err.message}). The page tries again on its own.`;
+  } finally {
+    readingVault = false;
+  }
+}
+
 function onWalletAccount(address) {
   live.state = null;
   live.loadedRuleFor = null;
@@ -1516,6 +1556,7 @@ async function startLive() {
   renderRuleBuilder();
   renderStats();
   followAgentConsole();
+  setInterval(() => { if (!document.hidden) refreshVaultActivity(); }, NETWORKS[Chain.chainId].pollMs);
   // A wallet that already allowed this page reconnects without a prompt
   if (window.ethereum) {
     const accounts = await window.ethereum.request({ method: "eth_accounts" }).catch(() => []);
@@ -1540,3 +1581,5 @@ if (isLive) {
   if (remembered && users[remembered]) startSession(remembered);
   else openLogin();
 }
+// The link we give judges opens their page directly
+if (location.hash === "#judges") showTab("tamper");

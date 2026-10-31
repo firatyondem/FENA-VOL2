@@ -28,6 +28,7 @@ python -m http.server 8000
 
 | | |
 | --- | --- |
+| Try it, no wallet needed | [niclas488.github.io/API3-FENA](https://niclas488.github.io/API3-FENA/) |
 | Network | Base Sepolia (chain id 84532) |
 | Vault | [`0xcf3f62D4316e5162777B34a8722798d2eBA017f5`](https://sepolia.basescan.org/address/0xcf3f62D4316e5162777B34a8722798d2eBA017f5) |
 | Deployed at block | 52460329 |

@@ -55,6 +55,8 @@ covers it. 384 contract tests, 145 agent tests and 9 end-to-end tests pass.
   was right. Each asset uses one source, so a bad feed is not cross-checked; comparing two listings is on our roadmap.
 - **No proof of cause.** The vault checks the user's rule. It does not claim the post moved the price.
 - **Mock tokens and a mock DEX.** This is a testnet prototype, and the DEX fills at exactly the signed price.
+- **A demo threshold.** The deployed ETH profile allows a rise of 0.5 % so that a trade can complete during a live run.
+  The spec's value is 3 %, and the vault enforces whichever the profile sets.
 
 ## What data we wanted but could not find
 
