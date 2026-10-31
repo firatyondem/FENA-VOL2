@@ -110,13 +110,20 @@
 
     <!-- ===== MONEY ===== -->
     <section class="panel hidden" id="tab-money">
-      <div class="explain">Money <b>in the vault</b> is what your rule may invest. Only you can put money in or take it out. Practice mode uses play money (mUSDC).</div>
+      <div class="explain">Money <b>in the vault</b> is what your rule may invest. Only you can put money in or take it out. <span class="practice-only">Practice mode uses play money (mUSDC).</span><span class="live-only hidden">Live mode uses mUSDC, a test token on the vault's network.</span></div>
       <div class="grid2 even">
         <div class="card">
           <h2>Deposit</h2>
           <p class="muted small">Add money to your vault so your rule can invest it.</p>
+          <div class="live-only hidden">
+            <div class="eyebrow" style="margin-top:14px">in your wallet</div>
+            <div class="kpi" id="walletUsdc">–</div>
+            <div class="buttons" style="margin-top:8px"><button class="btn small" id="faucetBtn">Get 10,000 test mUSDC</button></div>
+            <span class="muted small">mUSDC is a free testnet token; anyone may mint it.</span>
+          </div>
           <div class="field"><label for="depositInput">amount in mUSDC</label><input type="number" id="depositInput" min="0" placeholder="e.g. 1000"></div>
           <div class="buttons" style="margin-top:14px"><button class="btn primary" id="depositBtn">Deposit</button></div>
+          <div class="muted small" id="depositStatus" role="status"></div>
           <div class="error" id="depositError"></div>
         </div>
         <div class="card">
@@ -130,6 +137,7 @@
             <button class="btn" id="withdrawBtn">Withdraw</button>
             <button class="btn danger" id="withdrawAllBtn">Withdraw everything</button>
           </div>
+          <div class="muted small" id="withdrawStatus" role="status"></div>
           <div class="error" id="withdrawError"></div>
         </div>
       </div>
@@ -314,10 +322,18 @@
       <button class="btn primary" style="width:100%;margin-top:18px">Create account</button>
       <p class="muted small" style="margin-bottom:0">You must be 18 or older.</p>
     </form>
-    <p class="muted small" style="margin-bottom:0">Practice login: accounts are stored in this browser only.
+    <div id="walletLogin" class="hidden">
+      <p class="muted" style="margin-top:0">Live mode: your wallet is your account. Connect it to deposit, save your rule and follow your investments on-chain.</p>
+      <button class="btn primary" id="connectBtn" type="button" style="width:100%">Connect wallet</button>
+      <div class="error" id="connectError"></div>
+    </div>
+    <p class="muted small" style="margin-bottom:0"><span id="practiceNote">Practice login: accounts are stored in this browser only.</span>
       <button class="link small" id="browseBtn" type="button">Look around first</button></p>
   </div>
 </div>
+
+<!-- ===== Live mode: transaction notices ===== -->
+<div class="toasts" id="toasts" aria-live="polite"></div>
 
 <script src="vendor/ethers.umd.min.js"></script>
 <script src="js/config.js"></script>

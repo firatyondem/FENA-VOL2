@@ -111,6 +111,13 @@ const Chain = {
     }
   },
 
+  // The wallet as an ethers provider, checking for receipts as often as the page polls (ethers' default is 4 s)
+  walletProvider() {
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    provider.pollingInterval = this.network.pollMs;
+    return provider;
+  },
+
   // Asks the wallet for an account on this network. onAccount runs again whenever the user switches accounts.
   async connect(onAccount) {
     if (!window.ethereum) throw new Revert("NoWallet");
@@ -120,14 +127,13 @@ const Chain = {
     } catch (error) {
       throw this.decodeError(error);
     }
-    const browser = new ethers.BrowserProvider(window.ethereum);
-    this.signer = await browser.getSigner();
+    this.signer = await this.walletProvider().getSigner();
     this.account = ethers.getAddress(await this.signer.getAddress());
     if (!this.listening && window.ethereum.on) {
       this.listening = true;
       window.ethereum.on("accountsChanged", async accounts => {
         if (!accounts.length) { this.account = this.signer = null; onAccount(null); return; }
-        this.signer = await new ethers.BrowserProvider(window.ethereum).getSigner();
+        this.signer = await this.walletProvider().getSigner();
         this.account = ethers.getAddress(accounts[0]);
         onAccount(this.account);
       });
