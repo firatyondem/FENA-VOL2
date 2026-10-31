@@ -245,7 +245,8 @@
     <!-- ===== FOR JUDGES: TAMPER TEST (reached from the footer) ===== -->
     <section class="panel hidden" id="tab-tamper">
       <div class="explain"><b>For judges.</b> This page proves the contract can't be tricked. Each button sends signed price data to the contract: the first is real and fresh and must be accepted; the others are faked in one way each and must be blocked before any money moves. You can also paste your own signed response.</div>
-      <div class="explain live-only hidden"><b>This tab is a simulation, also in live mode.</b> It runs the practice model of the contract in your browser; nothing here reaches the vault. To send the same forgeries to the real vault, run <code>npm run tamper-demo</code> in <code>agent/</code> with the agent's <code>.env</code> (<code>RPC_URL</code>, <code>AGENT_PRIVATE_KEY</code>) plus <code>VAULT_ADDRESS</code> and <code>TRIGGER_ID</code>, the id of an open ETH price check: it prints the vault's refusal for each one. <code>forge test</code> in <code>contracts/</code> checks them too.</div>
+      <div class="explain practice-only"><b>Practice mode: this tab is a simulation.</b> It runs the practice model of the contract in your browser. Open live mode to test the deployed vault.</div>
+      <div class="explain live-only hidden"><b>This tab asks the deployed vault.</b> Every result below comes from its read-only <code>checkPrice</code>, the same check each buy and sell runs. It needs no wallet and no gas, and nothing can move. The buttons take a fresh signed response from the agent's console; a pasted response goes straight to the vault. <code>npm run tamper-demo</code> in <code>agent/</code> does the same from a terminal. The replay check belongs to a buy, so <code>forge test</code> in <code>contracts/</code> covers it.</div>
       <div class="card">
         <div class="buttons" id="tamperButtons">
           <button class="btn primary" data-kind="valid">Real, fresh response</button>
@@ -253,7 +254,7 @@
           <button class="btn" data-kind="stale">2 · Too old</button>
           <button class="btn" data-kind="wrongRequest">3 · Different request</button>
           <button class="btn" data-kind="wrongSigner">4 · Wrong signer</button>
-          <button class="btn" data-kind="replay">Same response twice</button>
+          <button class="btn practice-only" data-kind="replay">Same response twice</button>
         </div>
       </div>
       <div class="grid2 even" style="margin-top:16px">
@@ -262,6 +263,11 @@
           <pre class="code" id="tamperJson">Click a button above.</pre>
           <p class="muted small">Paste your own signed response:</p>
           <textarea id="judgeJson" placeholder='{"requestHash":"0x…","timestamp":1793000000,"data":{"price":3400},"signature":"0x…"}'></textarea>
+          <label class="muted small live-only hidden" style="display:block;margin-top:10px">Check it as the price of
+            <select id="judgeAsset">
+              <option>ETH</option><option>BTC</option><option>DOGE</option><option>OIL</option><option>TSLA</option>
+            </select>
+          </label>
           <button class="btn" id="judgeSubmitBtn" style="margin-top:10px">Submit pasted response</button>
         </div>
         <div class="card">
@@ -327,6 +333,7 @@
       <p class="muted" style="margin-top:0">Live mode: your wallet is your account. Connect it to deposit, save your rule and follow your investments on-chain.</p>
       <button class="btn primary" id="connectBtn" type="button" style="width:100%">Connect wallet</button>
       <div class="error" id="connectError"></div>
+      <p class="muted small" style="margin-bottom:0"><button class="link small" data-goto="tamper" type="button">For judges: test the vault without a wallet →</button></p>
     </div>
     <p class="muted small" style="margin-bottom:0"><span id="practiceNote">Practice login: accounts are stored in this browser only.</span>
       <button class="link small" id="browseBtn" type="button">Look around first</button></p>

@@ -57,6 +57,9 @@ const REASONS = {
   PriceBeforeBuy: "the price was taken before the investment",
   PriceTooOld: "the signed price is too old, so the market may be closed",
   NotSignedByAirnode: "it wasn't signed by the expected Airnode (a value was edited, or the key is wrong)",
+  ECDSAInvalidSignature: "the signature isn't a valid signature",
+  ECDSAInvalidSignatureLength: "the signature has the wrong length",
+  ECDSAInvalidSignatureS: "the signature isn't a valid signature",
   TweetAlreadyUsed: "this post already started a price check for this asset",
   PriceOutsideTweetWindow: "the price wasn't taken within 10 minutes after the post",
   TriggerNotOpen: "the price check is already closed",
@@ -210,11 +213,12 @@ $("registerForm").onsubmit = async e => {
   startSession(name);
 };
 
-$("browseBtn").onclick = () => { $("loginModal").classList.add("hidden"); document.body.classList.remove("locked"); };
+const closeLogin = () => { $("loginModal").classList.add("hidden"); document.body.classList.remove("locked"); };
+$("browseBtn").onclick = closeLogin;
 
-// Logged out: every click on a control opens the login instead
+// Logged out: every click on a control opens the login instead, except the tamper test, which judges run without a wallet
 document.addEventListener("click", e => {
-  if (session || e.target.closest("#loginModal") || !e.target.closest("button, a, input, select, label, textarea")) return;
+  if (session || e.target.closest("#loginModal, #tab-tamper, [data-goto='tamper']") || !e.target.closest("button, a, input, select, label, textarea")) return;
   e.preventDefault();
   e.stopPropagation();
   openLogin();
@@ -230,7 +234,10 @@ function showTab(name) {
   if (name === "profile") renderProfile();
   if (name === "money") renderMoney();
   if (name === "activity") renderNextStep();
-  if (name === "tamper") window.scrollTo({ top: $("tab-tamper").offsetTop - 20, behavior: "smooth" });
+  if (name === "tamper") {
+    closeLogin();
+    window.scrollTo({ top: $("tab-tamper").offsetTop - 20, behavior: "smooth" });
+  }
 }
 document.querySelectorAll(".tabs .tab").forEach(t => t.onclick = () => showTab(t.dataset.tab));
 document.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => showTab(b.dataset.goto));
@@ -1244,32 +1251,70 @@ $("tab-history").onclick = e => {
 // Tamper test (for judges, reached from the footer)
 // =========================================================
 const HIGHLIGHT = { edited: "price", stale: "timestamp", wrongRequest: "requestHash", wrongSigner: "signature" };
+// Each button's case in the agent's tamper set (live mode)
+const TAMPER_CASES = { valid: "Real, fresh response", edited: "Edited value", stale: "Stale response", wrongRequest: "Different request", wrongSigner: "Wrong signer" };
 let firstTamper = true;
 function showResponse(r, kind) {
+  // A real response holds its price inside the signed data
+  const field = isLive && kind === "edited" ? "data" : HIGHLIGHT[kind];
   $("tamperJson").innerHTML = esc(JSON.stringify(r, null, 2)).split("\n").map(l =>
-    HIGHLIGHT[kind] && l.includes(`&quot;${HIGHLIGHT[kind]}&quot;`) ? `<span class="edited">${l}</span>` : l).join("\n");
+    field && l.includes(`&quot;${field}&quot;`) ? `<span class="edited">${l}</span>` : l).join("\n");
 }
-function submitResponse(r, label) {
-  let html;
-  try {
-    const price = Mock.verify(r); // the practice model, in both modes; live mode labels this tab a simulation
-    html = `<span class="badge ok">accepted</span> ${esc(label)}: the verified ETH/USD price ${fmtPrice(price)} was used.`;
-  } catch (err) {
-    html = `<span class="badge bad">blocked</span> ${esc(label)}: ${esc(reasonText(err))}.`;
-  }
+function addTamperResult(html) {
   if (firstTamper) { $("tamperResults").innerHTML = ""; firstTamper = false; }
   $("tamperResults").insertAdjacentHTML("afterbegin", `<div class="item"><div class="meta">${clock(Date.now())}</div>${html}</div>`);
 }
-document.querySelectorAll("#tamperButtons .btn").forEach(btn => btn.onclick = () => {
-  const r = Mock.tamper(btn.dataset.kind);
-  showResponse(r, btn.dataset.kind);
-  submitResponse(r, btn.textContent);
+function submitResponse(r, label) {
+  try {
+    const price = Mock.verify(r); // the practice model; live mode asks the vault instead
+    addTamperResult(`<span class="badge ok">accepted</span> ${esc(label)}: the verified ETH/USD price ${fmtPrice(price)} was used.`);
+  } catch (err) {
+    addTamperResult(`<span class="badge bad">blocked</span> ${esc(label)}: ${esc(reasonText(err))}.`);
+  }
+}
+// Only a revert is the vault saying no; anything else, such as an RPC that didn't answer, says nothing about the response
+async function checkOnVault(r, label, asset) {
+  try {
+    const { price, priceTime } = await Chain.checkPrice(asset, r);
+    addTamperResult(`<span class="badge ok">accepted</span> ${esc(label)}: the vault verified ${esc(asset)} at ${fmtPrice(price)}, taken ${clock(priceTime * 1000)}. Nothing moved.`);
+  } catch (err) {
+    if (err instanceof Revert) addTamperResult(`<span class="badge bad">blocked</span> ${esc(label)}: ${esc(reasonText(err))}. The vault answered <code>${esc(err.reason)}</code>.`);
+    else addTamperResult(`<span class="badge">not checked</span> ${esc(label)}: this never got a verdict from the vault (${esc(err.shortMessage || err.message)}).`);
+  }
+}
+async function fetchTamperCase(kind) {
+  let res;
+  try {
+    res = await fetch(`${NETWORKS[Chain.chainId].agentConsole}/api/tamper-set?asset=ETH`);
+  } catch {
+    throw new Error("the agent's console can't be reached, so there's no fresh response to test. Start the agent in live mode, or paste a response below: that goes straight to the vault");
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `the agent's console answered ${res.status}`);
+  return body.cases.find(c => c.name === TAMPER_CASES[kind]);
+}
+document.querySelectorAll("#tamperButtons .btn").forEach(btn => btn.onclick = async () => {
+  const kind = btn.dataset.kind;
+  if (!isLive) {
+    const r = Mock.tamper(kind);
+    showResponse(r, kind);
+    return submitResponse(r, btn.textContent);
+  }
+  try {
+    const { response } = await fetchTamperCase(kind);
+    showResponse(response, kind);
+    await checkOnVault(response, btn.textContent, "ETH");
+  } catch (err) {
+    addTamperResult(`<span class="badge">not checked</span> ${esc(btn.textContent)}: ${esc(err.message)}.`);
+  }
 });
 $("judgeSubmitBtn").onclick = () => {
   let r;
   try { r = JSON.parse($("judgeJson").value); } catch { return alert("That isn't valid JSON."); }
   if (typeof r.signature !== "string") return alert("The response needs a signature field.");
+  if (isLive && typeof r.data !== "string") return alert("The response's data must be the exact text the Airnode signed, as a string.");
   showResponse(r);
+  if (isLive) return checkOnVault(r, "pasted response", $("judgeAsset").value);
   submitResponse(r, "pasted response");
 };
 
@@ -1455,6 +1500,7 @@ function onWalletAccount(address) {
 async function startLive() {
   document.querySelectorAll(".live-only").forEach(el => el.classList.remove("hidden"));
   document.querySelectorAll(".practice-only").forEach(el => el.classList.add("hidden"));
+  $("judgeJson").placeholder = '{"requestHash":"0x…","timestamp":"1793000000","data":"{\\"price\\":3400,\\"updatedAt\\":1793000000000}","signature":"0x…"}';
   renderModeChip();
   // Settles to null or the load error, so the Connect button can wait on it without throwing
   live.loading = Chain.load().then(() => null, err => err);

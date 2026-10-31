@@ -13,11 +13,11 @@ if (!RPC_URL || !USER_PRIVATE_KEY) throw new Error('Set RPC_URL and USER_PRIVATE
 const agent = AGENT_ADDRESS ?? (AGENT_PRIVATE_KEY ? privateKeyToAccount(AGENT_PRIVATE_KEY as Hex).address : undefined);
 if (!agent || !isAddress(agent)) throw new Error('Set AGENT_ADDRESS or AGENT_PRIVATE_KEY');
 
-const chain = Number(process.env.CHAIN_ID ?? baseSepolia.id) === foundry.id ? foundry : baseSepolia;
+const chain = Number(process.env.CHAIN_ID || baseSepolia.id) === foundry.id ? foundry : baseSepolia;
 const deployment = readJson<{ vault: Address; usdc: Address }>(
   new URL(`../../shared/deployments/${chain.id}.json`, import.meta.url)
 );
-const config = readJson<RuleConfig>(new URL(RULE_FILE ?? '../config/rule.example.json', import.meta.url));
+const config = readJson<RuleConfig>(new URL(RULE_FILE || '../config/rule.example.json', import.meta.url));
 const walletClient = createWalletClient({ chain, transport: http(RPC_URL), account: privateKeyToAccount(USER_PRIVATE_KEY as Hex) });
 const hashes = await applyRule({
   publicClient: createPublicClient({ chain, transport: http(RPC_URL) }) as never,

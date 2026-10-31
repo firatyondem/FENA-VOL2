@@ -12,7 +12,7 @@ const profiles = loadProfiles();
 // Events carry the agent's clock, which the replay runs faster than real time.
 let agentNow = () => Math.floor(Date.now() / 1000);
 const log = new EventLog({ file: new URL('../.data/events.jsonl', import.meta.url), now: () => agentNow() * 1000 });
-const port = Number(process.env.CONSOLE_PORT ?? 4173);
+const port = Number(process.env.CONSOLE_PORT || 4173);
 // Pages that may read the explanation log, comma-separated: the frontend shows the AI's reason beside each post
 const allowedOrigins = process.env.CONSOLE_ALLOWED_ORIGINS?.split(',')
   .map((origin) => origin.trim())
@@ -21,18 +21,18 @@ const allowedOrigins = process.env.CONSOLE_ALLOWED_ORIGINS?.split(',')
 // Claude reads meaning when a key is set; otherwise the keyword baseline runs, so the replay works offline.
 const classifier: Classifier = process.env.ANTHROPIC_API_KEY
   ? new ClaudeClassifier({
-      model: process.env.CLASSIFIER_MODEL,
+      model: process.env.CLASSIFIER_MODEL || undefined,
       onError: (error) => log.append({ kind: 'error', where: 'classifier', message: String(error) }),
     })
   : new KeywordClassifier();
 
-const mode = process.env.AGENT_MODE ?? 'replay';
+const mode = process.env.AGENT_MODE || 'replay';
 if (mode === 'replay') {
   const replay = await startReplay({
     profiles,
     log,
     classifier,
-    speed: Number(process.env.REPLAY_SPEED ?? 10),
+    speed: Number(process.env.REPLAY_SPEED || 10),
     onClock: (now) => (agentNow = now),
   });
   await startConsoleServer({ log, now: replay.now, port, allowedOrigins });
@@ -41,7 +41,10 @@ if (mode === 'replay') {
   const live = await startLive({ profiles, log, classifier });
   // The frontend's manual sell takes its signed price from the same source as the keeper
   const prices = { assets: Object.keys(profiles.assets), fetch: live.fetchPrice };
-  await startConsoleServer({ log, now: live.now, port, allowedOrigins, prices, status: live.status });
+  // The judges' tamper test takes its fresh responses from the same source and the same cache
+  const { fetchJudgeSet } = await import('../scripts/tamper-set.ts');
+  const tamper = { assets: ['ETH'], build: (_asset: string, priceOf: typeof live.fetchPrice) => fetchJudgeSet(priceOf) };
+  await startConsoleServer({ log, now: live.now, port, allowedOrigins, prices, tamper, status: live.status });
 } else {
   throw new Error(`AGENT_MODE must be replay or live, not ${mode}`);
 }

@@ -22,6 +22,7 @@
     "set-rule": "node --env-file-if-exists=.env scripts/set-rule.ts",
     "wallets": "node --env-file-if-exists=.env scripts/wallets.ts",
     "run-report": "node scripts/run-report.ts",
+    "add-account": "node --env-file-if-exists=.env scripts/add-account.ts",
     "local-stage": "node scripts/local-stage.ts"
   },
   "dependencies": {

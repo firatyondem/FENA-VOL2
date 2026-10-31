@@ -69,6 +69,24 @@ export const revertReason = (error: unknown): string =>
   revertName(error) ??
   (error instanceof BaseError ? error.shortMessage : error instanceof Error ? error.message : String(error));
 
+// The vault's own checks on a price response. Anyone may ask and nothing moves, so this needs no wallet; a refusal comes
+// back as a VaultRejection, like a write's.
+export const checkPrice = async (publicClient: PublicClient, address: Address, asset: string, response: SignedResponse) => {
+  try {
+    const [price, priceTime] = await publicClient.readContract({
+      address,
+      abi: vaultAbi,
+      functionName: 'checkPrice',
+      args: [assetIdOf(asset), toVaultResponse(response)],
+    });
+    return { price, priceTime };
+  } catch (error) {
+    const name = revertName(error);
+    if (name) throw new VaultRejection(name);
+    throw error;
+  }
+};
+
 type EventName = 'TriggerOpened' | 'TriggerConfirmed' | 'PositionSold' | 'TriggerExpired' | 'RuleSet';
 
 // The events the agent scans, each read once per block range and cached

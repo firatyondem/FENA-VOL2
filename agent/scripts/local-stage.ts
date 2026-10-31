@@ -58,8 +58,8 @@ const { positionals, values } = parseArgs({
     position: { type: 'string' },
     move: { type: 'string', default: '0' },
     reason: { type: 'string', default: 'takeprofit' },
-    port: { type: 'string', default: process.env.CONSOLE_PORT ?? '4173' },
-    rpc: { type: 'string', default: process.env.LOCAL_RPC_URL ?? 'http://127.0.0.1:8545' },
+    port: { type: 'string', default: process.env.CONSOLE_PORT || '4173' },
+    rpc: { type: 'string', default: process.env.LOCAL_RPC_URL || 'http://127.0.0.1:8545' },
   },
 });
 

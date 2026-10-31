@@ -185,6 +185,17 @@ const Chain = {
     }
   },
 
+  // Asks the deployed vault to run its price checks on a signed response: no wallet, no gas, nothing moves. Resolves with
+  // the price it read and when the source took it, or throws a Revert named after the vault's error.
+  async checkPrice(asset, response) {
+    try {
+      const [price, priceTime] = await this.read.vault.checkPrice(this.deployment.assetIds[asset], Units.signedResponseToContract(response));
+      return { price: Units.priceFromWei(price), priceTime: Number(priceTime) };
+    } catch (error) {
+      throw this.decodeError(error);
+    }
+  },
+
   // Reads every vault event since the deployment, in chunks the RPC accepts, and only new blocks after that
   async scanLogs() {
     const provider = this.read.provider, vault = this.read.vault;

@@ -12,7 +12,7 @@ import {
 import type { SignedResponse } from '../src/airnode/attestation.ts';
 import { vaultAbi } from '../src/chain/vault-abi.ts';
 import { TxTimeout, VaultRejection } from '../src/chain/vault.ts';
-import { assetIdOf, revertReason, toVaultResponse, ViemVault } from '../src/chain/viem-vault.ts';
+import { assetIdOf, checkPrice, revertReason, toVaultResponse, ViemVault } from '../src/chain/viem-vault.ts';
 import { loadProfiles } from '../src/profiles.ts';
 import { readSharedJson } from './helpers.ts';
 
@@ -62,6 +62,32 @@ test('a signed response goes to the vault with its request hash and its data as 
   assert.equal(encoded.timestamp, BigInt(post.timestamp));
   assert.equal(Buffer.from(encoded.data.slice(2), 'hex').toString('utf8'), post.data);
   assert.equal(encoded.signature, post.signature);
+});
+
+test('checkPrice reads the vault with no wallet, names a refusal and passes an RPC failure through', async () => {
+  const response = fixture('eth-p1-rise.json');
+  const asked: { functionName: string; args: unknown[] }[] = [];
+  const answering = (answer: () => unknown) =>
+    ({
+      readContract: async (params: { functionName: string; args: unknown[] }) => {
+        asked.push(params);
+        return answer();
+      },
+    }) as never;
+
+  const read = await checkPrice(answering(() => [2070n, 1793381220n]), VAULT, 'ETH', response);
+  assert.deepEqual(read, { price: 2070n, priceTime: 1793381220n });
+  assert.equal(asked[0]?.functionName, 'checkPrice');
+  assert.deepEqual(asked[0]?.args, [assetIdOf('ETH'), toVaultResponse(response)]);
+
+  await assert.rejects(
+    checkPrice(answering(() => { throw revert('ResponseTooOld', [1n]); }), VAULT, 'ETH', response),
+    (error) => error instanceof VaultRejection && error.reason === 'ResponseTooOld'
+  );
+  await assert.rejects(
+    checkPrice(answering(() => { throw new Error('rpc down'); }), VAULT, 'ETH', response),
+    /rpc down/
+  );
 });
 
 test('opens a trigger as openTrigger(user, assetId, tweet, p0) and names the revert', async () => {

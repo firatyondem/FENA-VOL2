@@ -27,6 +27,7 @@ const ACCOUNTS = [
   { handle: "elonmusk",        name: "Elon Musk",    role: "Tesla / X owner",      assets: ["DOGE", "TSLA"] },
   { handle: "JDVance",         name: "JD Vance",     role: "Vice President",       assets: ["BTC", "OIL"] },
   { handle: "marcorubio",      name: "Marco Rubio",  role: "Secretary of State",   assets: ["OIL"] },
+  { handle: "fenahackdemo",    name: "FENA demo",    role: "Our demo account",     assets: ["ETH", "BTC", "DOGE"] },
 ];
 
 // Suggested topics per asset (spec "Topic -> asset map"). Users can edit them.

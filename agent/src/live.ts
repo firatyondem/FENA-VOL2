@@ -61,14 +61,15 @@ export interface LiveOptions {
 export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
   installCrashHandlers(log);
   const rpcUrl = requireEnv('RPC_URL');
-  const chain = Number(process.env.CHAIN_ID ?? baseSepolia.id) === foundry.id ? foundry : baseSepolia;
+  const chain = Number(process.env.CHAIN_ID || baseSepolia.id) === foundry.id ? foundry : baseSepolia;
   const account = privateKeyToAccount(requireKey('AGENT_PRIVATE_KEY'));
 
   // Written by contracts/script/Deploy.s.sol
   const deployment = readJson<{ vault: Address; deployedAtBlock: number }>(
     new URL(`../../shared/deployments/${chain.id}.json`, import.meta.url)
   );
-  const vaultAddress = process.env.VAULT_ADDRESS ?? deployment.vault;
+  // An empty line in .env counts as unset here and below, as it does in .env.example
+  const vaultAddress = process.env.VAULT_ADDRESS || deployment.vault;
   if (!isAddress(vaultAddress)) throw new Error('VAULT_ADDRESS is not an address');
   const watchlist = loadWatchlist();
 

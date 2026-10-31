@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
+import type { SignedResponse } from '../src/airnode/attestation.ts';
 import { startConsoleServer } from '../src/console/server.ts';
 import { EventLog } from '../src/log.ts';
 // @ts-expect-error The view model is plain browser JavaScript without type declarations
@@ -125,6 +126,67 @@ test('without a price source the signed-price route says so', async () => {
     const response = await fetch(`${base}/api/signed-price?asset=ETH`);
     assert.equal(response.status, 404);
     assert.match(((await response.json()) as { error: string }).error, /no signed prices/);
+  });
+});
+
+test('serves the tamper set from the cached prices, for its own assets only', async () => {
+  const log = new EventLog({ now: () => 1_000 });
+  const fetched: string[] = [];
+  let fail = false;
+  const prices = {
+    assets: ['ETH', 'BTC', 'OIL'],
+    fetch: async (asset: string) => {
+      fetched.push(asset);
+      if (fail) throw new Error('feed down');
+      return { requestHash: '0x01', timestamp: '1', data: `{"asset":"${asset}"}`, signature: '0x02' } as never;
+    },
+  };
+  const tamper = {
+    assets: ['ETH'],
+    build: async (asset: string, priceOf: (asset: string) => Promise<SignedResponse>) => [
+      { name: 'Real', how: 'unchanged', expected: 'accepted', response: await priceOf(asset) },
+      { name: 'Other', how: 'another asset', expected: 'WrongRequestHash', response: await priceOf('BTC') },
+    ],
+  };
+  const server = await startConsoleServer({ log, now: () => 0, port: 0, prices, tamper, priceCacheMs: 10_000 });
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const get = (asset: string) => fetch(`${base}/api/tamper-set?asset=${asset}`, { headers: { Origin: 'http://localhost:8000' } });
+  try {
+    const first = await get('ETH');
+    assert.equal(first.status, 200);
+    assert.equal(first.headers.get('access-control-allow-origin'), 'http://localhost:8000');
+    const body = (await first.json()) as { cases: { name: string; response: { data: string } }[] };
+    assert.deepEqual(body.cases.map((tamperCase) => tamperCase.name), ['Real', 'Other']);
+    assert.equal(body.cases[1]?.response.data, '{"asset":"BTC"}');
+
+    assert.equal((await get('ETH')).status, 200);
+    assert.equal((await fetch(`${base}/api/signed-price?asset=ETH`)).status, 200);
+    assert.deepEqual(fetched, ['ETH', 'BTC'], 'one fetch per asset for every route in the window');
+
+    assert.equal((await get('OIL')).status, 400, 'an asset without a tamper set');
+    assert.deepEqual(fetched, ['ETH', 'BTC']);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+
+  fail = true;
+  const failing = await startConsoleServer({ log, now: () => 0, port: 0, prices, tamper });
+  try {
+    const response = await fetch(`http://127.0.0.1:${(failing.address() as AddressInfo).port}/api/tamper-set?asset=ETH`);
+    assert.equal(response.status, 502);
+    assert.match(((await response.json()) as { error: string }).error, /feed down/);
+  } finally {
+    failing.closeAllConnections();
+    await new Promise((resolve) => failing.close(resolve));
+  }
+});
+
+test('without a price source the tamper-set route says so', async () => {
+  await withServer(async (base) => {
+    const response = await fetch(`${base}/api/tamper-set?asset=ETH`);
+    assert.equal(response.status, 404);
+    assert.match(((await response.json()) as { error: string }).error, /no tamper set/);
   });
 });
 
