@@ -245,6 +245,7 @@
     <!-- ===== FOR JUDGES: TAMPER TEST (reached from the footer) ===== -->
     <section class="panel hidden" id="tab-tamper">
       <div class="explain"><b>For judges.</b> This page proves the contract can't be tricked. Each button sends signed price data to the contract: the first is real and fresh and must be accepted; the others are faked in one way each and must be blocked before any money moves. You can also paste your own signed response.</div>
+      <div class="explain live-only hidden"><b>This tab is a simulation, also in live mode.</b> It runs the practice model of the contract in your browser; nothing here reaches the vault. To send the same forgeries to the real vault, run <code>npm run tamper-demo</code> in <code>agent/</code> with the agent's <code>.env</code> (<code>RPC_URL</code>, <code>AGENT_PRIVATE_KEY</code>) plus <code>VAULT_ADDRESS</code> and <code>TRIGGER_ID</code>, the id of an open ETH price check: it prints the vault's refusal for each one. <code>forge test</code> in <code>contracts/</code> checks them too.</div>
       <div class="card">
         <div class="buttons" id="tamperButtons">
           <button class="btn primary" data-kind="valid">Real, fresh response</button>
