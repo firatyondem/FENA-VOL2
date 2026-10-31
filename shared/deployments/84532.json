@@ -18,6 +18,7 @@
   "deployer": "0x5A1a84E5e4D602738857c77ebd4940514B4B5868",
   "dex": "0xeBd37155c02fba8acB360459c28e8D0b1c8Aff88",
   "fixtureAirnodes": false,
+  "scanFromBlock": 52596000,
   "usdc": "0x546c0555099cbD59FE8148525395Cf914BEcfEF1",
   "vault": "0xcf3f62D4316e5162777B34a8722798d2eBA017f5"
 }

@@ -135,7 +135,7 @@ if (import.meta.main) {
   } else if (!existsSync(deploymentUrl)) {
     report.rulesUnavailable = `no deployment at shared/deployments/${chain.id}.json`;
   } else {
-    const deployment = JSON.parse(readFileSync(deploymentUrl, 'utf8')) as { vault: Address; deployedAtBlock: number };
+    const deployment = JSON.parse(readFileSync(deploymentUrl, 'utf8')) as { vault: Address; deployedAtBlock: number; scanFromBlock?: number };
     const vault = new ViemVault({
       address: (env.VAULT_ADDRESS as Address | undefined) || deployment.vault,
       publicClient: client as never,
@@ -143,7 +143,7 @@ if (import.meta.main) {
       walletClient: createWalletClient({ chain, transport: http(rpcUrl), account: privateKeyToAccount(env.AGENT_PRIVATE_KEY as Hex) }),
       profiles: loadProfiles(),
       watchlist,
-      fromBlock: BigInt(deployment.deployedAtBlock),
+      fromBlock: BigInt(deployment.scanFromBlock ?? deployment.deployedAtBlock),
     });
     try {
       const rules = await vault.listRules();

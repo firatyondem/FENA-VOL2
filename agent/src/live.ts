@@ -65,7 +65,8 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
   const account = privateKeyToAccount(requireKey('AGENT_PRIVATE_KEY'));
 
   // Written by contracts/script/Deploy.s.sol
-  const deployment = readJson<{ vault: Address; deployedAtBlock: number }>(
+  // scanFromBlock: nobody used the vault before it, and RPCs cap log searches at a few hundred blocks each
+  const deployment = readJson<{ vault: Address; deployedAtBlock: number; scanFromBlock?: number }>(
     new URL(`../../shared/deployments/${chain.id}.json`, import.meta.url)
   );
   // An empty line in .env counts as unset here and below, as it does in .env.example
@@ -119,7 +120,7 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
       walletClient,
       profiles,
       watchlist,
-      fromBlock: BigInt(deployment.deployedAtBlock),
+      fromBlock: BigInt(deployment.scanFromBlock ?? deployment.deployedAtBlock),
       txTimeoutMs: Number(process.env.TX_TIMEOUT_MS || 90_000),
     }),
     budget
