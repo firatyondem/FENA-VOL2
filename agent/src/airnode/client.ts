@@ -2,7 +2,7 @@
 // api3dao/airnodehub-hackathon-starter (MIT), src/x402.ts.
 import { ExactEvmScheme } from '@x402/evm';
 import { decodePaymentResponseHeader, wrapFetchWithPaymentFromConfig } from '@x402/fetch';
-import { type Hex, isAddress, isHex } from 'viem';
+import { type Address, erc20Abi, type Hex, isAddress, isHex, type PublicClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { AirnodeRequest, SignedResponse } from './attestation.ts';
 
@@ -15,6 +15,11 @@ export const AUSD_ADDRESS = '0xbeA34973e5f67F18F656A2C6070C64326C791808';
 // aUSD has 6 decimals; a tweet costs 0.01 aUSD
 export const AUSD_DECIMALS = 6;
 export const TWEET_PRICE_AUSD = 10_000n;
+
+// The payer's aUSD, read from a Base Sepolia client: that is where the Airnodes take payment, whichever chain the vault
+// is on
+export const readAusdBalance = (baseSepoliaClient: Pick<PublicClient, 'readContract'>, payer: Address) =>
+  baseSepoliaClient.readContract({ address: AUSD_ADDRESS, abi: erc20Abi, functionName: 'balanceOf', args: [payer] });
 
 // A tweet costs 0.01 aUSD and a TickerLayer price 0.05, so one dollar a call is a generous ceiling.
 const MAX_USD_PER_PAYMENT = '$1';

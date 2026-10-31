@@ -6,20 +6,18 @@ import {
   type Address,
   createPublicClient,
   createWalletClient,
-  erc20Abi,
   formatEther,
   formatUnits,
   type Hex,
   http,
   isAddressEqual,
   isHex,
-  parseEther,
-  parseUnits,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { baseSepolia, foundry } from 'viem/chains';
-import { AUSD_ADDRESS, AUSD_DECIMALS, TWEET_PRICE_AUSD } from '../src/airnode/client.ts';
+import { AUSD_DECIMALS, readAusdBalance, TWEET_PRICE_AUSD } from '../src/airnode/client.ts';
 import { ViemVault } from '../src/chain/viem-vault.ts';
+import { readBudgetSettings } from '../src/engine/budget.ts';
 import { activeWatchSet } from '../src/engine/watch-set.ts';
 import { loadProfiles } from '../src/profiles.ts';
 import { loadWatchlist } from '../src/sources/watchlist.ts';
@@ -47,10 +45,11 @@ export interface Check {
   message: string;
 }
 
-export const walletLimits = (env: NodeJS.ProcessEnv = process.env): WalletLimits => ({
-  minEth: parseEther(env.AGENT_MIN_ETH || '0.0005'),
-  minAusd: parseUnits(env.PAYER_MIN_AUSD || '0.2', AUSD_DECIMALS),
-});
+// The same minimums as the agent's budget: AGENT_MIN_ETH and PAYER_MIN_AUSD
+export const walletLimits = (env: NodeJS.ProcessEnv = process.env): WalletLimits => {
+  const { minEth, minAusd } = readBudgetSettings(env);
+  return { minEth, minAusd };
+};
 
 export const checkWallets = (report: WalletReport, limits: WalletLimits): Check[] => {
   const { agent, payer } = report;
@@ -126,15 +125,7 @@ if (import.meta.main) {
   const payerAddress = keyAddress(env, 'PAYER_PRIVATE_KEY');
   const report: WalletReport = {};
   if (agentAddress) report.agent = { address: agentAddress, eth: await client.getBalance({ address: agentAddress }) };
-  if (payerAddress) {
-    const ausd = await ausdClient.readContract({
-      address: AUSD_ADDRESS,
-      abi: erc20Abi,
-      functionName: 'balanceOf',
-      args: [payerAddress],
-    });
-    report.payer = { address: payerAddress, ausd };
-  }
+  if (payerAddress) report.payer = { address: payerAddress, ausd: await readAusdBalance(ausdClient, payerAddress) };
 
   const watchlist = loadWatchlist(env);
   let watched: string[] | undefined;

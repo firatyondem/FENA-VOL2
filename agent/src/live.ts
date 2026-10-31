@@ -4,9 +4,10 @@ import { readFileSync } from 'node:fs';
 import { type Address, createPublicClient, createWalletClient, type Hex, http, isAddress, isHex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { baseSepolia, foundry } from 'viem/chains';
-import { createPayingFetch, fetchSignedResponse, withSettlementReporting } from './airnode/client.ts';
+import { createPayingFetch, fetchSignedResponse, readAusdBalance, withSettlementReporting } from './airnode/client.ts';
 import { ViemVault } from './chain/viem-vault.ts';
 import type { Classifier } from './classifier/types.ts';
+import { Budget, budgetedFetch, GuardedVault, PRICED_AIRNODES, readBudgetSettings } from './engine/budget.ts';
 import { CycleRunner } from './engine/cycle.ts';
 import { SellKeeper } from './engine/keeper.ts';
 import { TriggerEngine } from './engine/trigger-engine.ts';
@@ -48,25 +49,47 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
   if (!isAddress(vaultAddress)) throw new Error('VAULT_ADDRESS is not an address');
   const watchlist = loadWatchlist();
 
+  const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+  const walletClient = createWalletClient({ chain, transport: http(rpcUrl), account });
+
+  // The agent's own money: the payer's aUSD for data and the agent wallet's ETH for gas, within daily budgets
   const payerKey = process.env.PAYER_PRIVATE_KEY;
-  const airnodeFetch: typeof fetch =
+  const payer = payerKey && isHex(payerKey) ? privateKeyToAccount(payerKey).address : undefined;
+  const ausdClient =
+    chain.id === baseSepolia.id
+      ? publicClient
+      : createPublicClient({ chain: baseSepolia, transport: http(process.env.AUSD_RPC_URL || 'https://sepolia.base.org') });
+  const budget = new Budget({
+    settings: readBudgetSettings(),
+    log,
+    trackAusd: Boolean(payer),
+    readBalances: async () => ({
+      ausd: payer ? await readAusdBalance(ausdClient as never, payer) : 0n,
+      eth: await publicClient.getBalance({ address: account.address }),
+    }),
+  });
+
+  const payingFetch: typeof fetch =
     payerKey && isHex(payerKey)
       ? withSettlementReporting(createPayingFetch(payerKey), (transaction) =>
           log.append({ kind: 'payment.settled', transaction })
         )
       : fetch;
+  const pricedUrls = PRICED_AIRNODES.flatMap((name) => profiles.airnodes[name]?.url ?? []);
+  const airnodeFetch = budgetedFetch(payingFetch, pricedUrls, budget);
 
-  const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
-  const walletClient = createWalletClient({ chain, transport: http(rpcUrl), account });
-  // The users whose rule names this agent's wallet, read from the vault
-  const vault = new ViemVault({
-    address: vaultAddress,
-    publicClient: publicClient as never,
-    walletClient,
-    profiles,
-    watchlist,
-    fromBlock: BigInt(deployment.deployedAtBlock),
-  });
+  // The users whose rule names this agent's wallet, read from the vault; every write passes the budget first
+  const vault = new GuardedVault(
+    new ViemVault({
+      address: vaultAddress,
+      publicClient: publicClient as never,
+      walletClient,
+      profiles,
+      watchlist,
+      fromBlock: BigInt(deployment.deployedAtBlock),
+    }),
+    budget
+  );
 
   const twitter = profiles.airnodes.twitterapi;
   if (!twitter) throw new Error('shared/asset-profiles.json has no twitterapi Airnode');
@@ -107,9 +130,10 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
     vault,
     watchlist,
     agent: account.address,
+    health: budget,
     cycleIntervalSec,
     pollIntervalSec,
   });
   cycles.start();
-  return { now, fetchPrice, cycles, stop: () => cycles.stop() };
+  return { now, fetchPrice, cycles, budget, stop: () => cycles.stop() };
 };

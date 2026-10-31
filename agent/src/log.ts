@@ -67,6 +67,15 @@ export type AgentEvent =
       nextAt: number;
     }
   | { kind: 'cycle.skipped'; cycle: number; reason: string; runningForMs: number }
+  | {
+      kind: 'budget.mode';
+      mode: 'normal' | 'saving' | 'halted';
+      reason: string;
+      ausdSpentToday: string;
+      ethSpentToday: string;
+      ausdBalance: string;
+      ethBalance: string;
+    }
   | { kind: 'error'; where: string; message: string };
 
 export type LoggedEvent = AgentEvent & { seq: number; at: number };
