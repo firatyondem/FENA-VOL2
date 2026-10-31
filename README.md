@@ -24,6 +24,27 @@ python -m http.server 8000
    in-memory copy of the vault, then the four forgeries it refuses.
 5. Serves the app: http://localhost:8000/frontend/ opens practice mode, where you play example posts yourself.
 
+## Deployed
+
+| | |
+| --- | --- |
+| Network | Base Sepolia (chain id 84532) |
+| Vault | [`0xcf3f62D4316e5162777B34a8722798d2eBA017f5`](https://sepolia.basescan.org/address/0xcf3f62D4316e5162777B34a8722798d2eBA017f5) |
+| Deployed at block | 52460329 |
+
+The mock USDC, DEX and asset tokens are in [shared/deployments/84532.json](shared/deployments/84532.json).
+
+Test the deployed vault yourself. Its read-only `checkPrice` runs the same check as every buy and sell, so this needs no
+wallet and no gas, and nothing can move:
+
+```bash
+cd agent && npm install && RPC_URL=https://sepolia.base.org npm run tamper-demo
+```
+
+It accepts a fresh signed price and refuses four forgeries of it, naming the vault's error for each. To test your own
+response, add `-- --response my.json --asset ETH`, or paste it into the app: open
+http://localhost:8000/frontend/?mode=live&chain=84532 and pick "For judges: test the vault without a wallet".
+
 ## Going further
 
 | To | See |
