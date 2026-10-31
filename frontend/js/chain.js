@@ -19,8 +19,10 @@ const LOG_CHUNK = 2000;
 function plain(value) {
   if (value && typeof value.toObject === "function") {
     try {
-      const obj = value.toObject(true);
-      if (Object.keys(obj).length) return obj;
+      const obj = value.toObject();
+      const keys = Object.keys(obj);
+      // ethers names the one item of an unnamed list "_", so a rule with one asset would stop being a list
+      if (keys.length && keys[0] !== "_") return Object.fromEntries(keys.map(key => [key, plain(obj[key])]));
     } catch { /* unnamed tuple: fall through to the array */ }
     return Array.from(value, plain);
   }
