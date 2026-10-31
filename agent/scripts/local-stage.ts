@@ -5,6 +5,9 @@
 //   npm run local-stage -- confirm --trigger <id> --move 3.5
 //   npm run local-stage -- sell --position <id> --move 9 --reason takeprofit|stagnation|manual
 //   npm run local-stage -- expire --trigger <id>
+//   npm run local-stage -- serve-prices [--move 2] [--port 4173]
+// serve-prices answers the frontend's manual sell like the agent's console does in live mode: /api/signed-price signs the
+// asset's newest price on the vault (its latest P0 or entry price), moved by --move, at anvil's time.
 // --move 0.5 shows TrendTooWeak, --move 30 shows SpikeTooHigh; a fall needs the = form, --move=-2. Every revert prints
 // the vault's error name.
 import { readFileSync } from 'node:fs';
@@ -18,6 +21,7 @@ import {
   http,
   isAddress,
   type PublicClient,
+  parseUnits,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { foundry } from 'viem/chains';
@@ -25,6 +29,8 @@ import { formatFixedPoint } from '../src/airnode/projected-json.ts';
 import { vaultAbi } from '../src/chain/vault-abi.ts';
 import { type SellKind, VaultRejection } from '../src/chain/vault.ts';
 import { assetIdOf, ViemVault } from '../src/chain/viem-vault.ts';
+import { startConsoleServer } from '../src/console/server.ts';
+import { EventLog } from '../src/log.ts';
 import { loadProfiles } from '../src/profiles.ts';
 import { ANVIL_KEYS, advanceChain, chainNow, signFixturePost, signFixturePrice } from './local-chain.ts';
 
@@ -52,6 +58,7 @@ const { positionals, values } = parseArgs({
     position: { type: 'string' },
     move: { type: 'string', default: '0' },
     reason: { type: 'string', default: 'takeprofit' },
+    port: { type: 'string', default: process.env.CONSOLE_PORT ?? '4173' },
     rpc: { type: 'string', default: process.env.LOCAL_RPC_URL ?? 'http://127.0.0.1:8545' },
   },
 });
@@ -186,6 +193,44 @@ const expire = async () => {
   return `Expired trigger ${id}; nothing was bought`;
 };
 
-const commands: Record<string, () => Promise<string>> = { open, confirm, sell, expire };
+// The newest price the vault holds for an asset: the latest P0 or entry price, by the time it was taken
+const newestPrice = async (asset: string) => {
+  const assetId = assetIdOf(asset).toLowerCase();
+  let newest = { price: parseUnits(DEFAULT_PRICES[asset] ?? '100', 18), time: -1n };
+  for (let id = await read<bigint>('triggerCount', []); id > 0n; id--) {
+    const trigger = await read<Trigger>('getTrigger', [id]);
+    if (trigger.assetId.toLowerCase() === assetId && trigger.t0 > newest.time) newest = { price: trigger.p0, time: trigger.t0 };
+  }
+  for (let id = await read<bigint>('positionCount', []); id > 0n; id--) {
+    const position = await read<Position>('getPosition', [id]);
+    if (position.assetId.toLowerCase() === assetId && position.openedAt > newest.time) {
+      newest = { price: position.entryPrice, time: position.openedAt };
+    }
+  }
+  return newest.price;
+};
+
+const servePrices = async () => {
+  const port = Number(values.port);
+  const assets = Object.keys(profiles.assets);
+  await startConsoleServer({
+    log: new EventLog(),
+    now: () => Math.floor(Date.now() / 1000),
+    port,
+    allowedOrigins: process.env.CONSOLE_ALLOWED_ORIGINS?.split(',').map((origin) => origin.trim()).filter(Boolean),
+    prices: {
+      assets,
+      fetch: async (asset) => {
+        const price = moved(await newestPrice(asset), values.move);
+        const response = await signFixturePrice(profiles, asset, formatFixedPoint(price, 18), await chainNow(testClient, publicClient));
+        console.log(`Signed ${asset} at ${formatFixedPoint(price, 18)} for the frontend`);
+        return response;
+      },
+    },
+  });
+  return `Serving fixture-signed prices (newest on-chain price moved ${values.move}%) at http://127.0.0.1:${port}/api/signed-price?asset=ETH; Ctrl+C stops`;
+};
+
+const commands: Record<string, () => Promise<string>> = { open, confirm, sell, expire, 'serve-prices': servePrices };
 const command = commands[positionals[0] ?? ''] ?? fail(`Usage: npm run local-stage -- <${Object.keys(commands).join('|')}> [options]`);
 await run(command);

@@ -65,6 +65,66 @@ test('reads its allowed origins from the options', async () => {
   }
 });
 
+test('serves one signed price per asset per window, and only for known assets', async () => {
+  const log = new EventLog({ now: () => 1_000 });
+  const fetched: string[] = [];
+  let fail = false;
+  const prices = {
+    assets: ['ETH', 'BTC'],
+    fetch: async (asset: string) => {
+      fetched.push(asset);
+      if (fail) throw new Error('payment failed');
+      return { airnode: '0x11F6e1661f92775Cd63763941E3c7C57750dE449', requestHash: '0x01', timestamp: String(fetched.length), data: '{"price":2070}', signature: '0x02' } as never;
+    },
+  };
+  const server = await startConsoleServer({ log, now: () => 0, port: 0, prices, priceCacheMs: 200 });
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const get = (asset: string) => fetch(`${base}/api/signed-price?asset=${asset}`, { headers: { Origin: 'http://localhost:8000' } });
+  try {
+    const state = (await (await fetch(`${base}/api/state`)).json()) as { signedPrices: boolean };
+    assert.equal(state.signedPrices, true);
+
+    const [first, second] = await Promise.all([get('ETH'), get('ETH')]);
+    assert.equal(first.status, 200);
+    assert.equal(first.headers.get('access-control-allow-origin'), 'http://localhost:8000');
+    const body = (await first.json()) as { asset: string; response: { timestamp: string; data: string } };
+    assert.equal(body.asset, 'ETH');
+    assert.equal(body.response.data, '{"price":2070}');
+    assert.deepEqual(await second.json(), body, 'requests in the same window share one signed price');
+    assert.deepEqual(fetched, ['ETH'], 'one fetch for both requests');
+
+    assert.equal((await get('DOGE')).status, 400, 'an asset the agent does not price');
+    assert.equal((await get('')).status, 400);
+    assert.deepEqual(fetched, ['ETH'], 'unknown assets never reach the paid source');
+
+    fail = true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const failed = await get('ETH');
+    assert.equal(failed.status, 502);
+    assert.match(((await failed.json()) as { error: string }).error, /payment failed/);
+    assert.equal((await get('ETH')).status, 502, 'a failure is not retried inside its window');
+    assert.deepEqual(fetched, ['ETH', 'ETH']);
+
+    fail = false;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal((await get('ETH')).status, 200, 'a new window fetches again');
+    assert.deepEqual(fetched, ['ETH', 'ETH', 'ETH']);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('without a price source the signed-price route says so', async () => {
+  await withServer(async (base) => {
+    const state = (await (await fetch(`${base}/api/state`)).json()) as { signedPrices: boolean };
+    assert.equal(state.signedPrices, false);
+    const response = await fetch(`${base}/api/signed-price?asset=ETH`);
+    assert.equal(response.status, 404);
+    assert.match(((await response.json()) as { error: string }).error, /no signed prices/);
+  });
+});
+
 test('refuses writes and unknown paths', async () => {
   await withServer(async (base) => {
     assert.equal((await fetch(`${base}/api/state`, { method: 'POST' })).status, 405);

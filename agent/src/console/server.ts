@@ -1,7 +1,9 @@
 // Serves the console and streams the explanation log. It listens on localhost only and has no write routes: the console
-// watches the agent, it never steers it. Pages on the allowed origins (the frontend) may read the log too.
+// watches the agent, it never steers it. Pages on the allowed origins (the frontend) may read the log too, and fetch a
+// fresh signed price for a manual sell.
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { SignedResponse } from '../airnode/attestation.ts';
 import type { EventLog } from '../log.ts';
 
 export interface ConsoleServerOptions {
@@ -11,8 +13,12 @@ export interface ConsoleServerOptions {
   port?: number;
   host?: string;
   clockIntervalMs?: number;
-  // Origins whose pages may read /api/state and /api/stream
+  // Origins whose pages may read /api/state, /api/stream and /api/signed-price
   allowedOrigins?: readonly string[];
+  // Signed prices for the frontend's manual sell; without them /api/signed-price answers 404
+  prices?: { assets: readonly string[]; fetch: (asset: string) => Promise<SignedResponse> };
+  // One signed price answers every request for its asset this long: at most one (paid) fetch per asset per window
+  priceCacheMs?: number;
 }
 
 export const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:8000'];
@@ -39,6 +45,8 @@ export const startConsoleServer = ({
   host = '127.0.0.1',
   clockIntervalMs = 1000,
   allowedOrigins = DEFAULT_ALLOWED_ORIGINS,
+  prices,
+  priceCacheMs = 10_000,
 }: ConsoleServerOptions): Promise<Server> => {
   const streams = new Set<ServerResponse>();
   // Event numbers restart with the agent, so a page that reconnects after a restart must start over
@@ -57,7 +65,34 @@ export const startConsoleServer = ({
       ...SECURITY_HEADERS,
       ...corsHeaders(request),
     });
-    response.end(JSON.stringify({ runId, now: now(), events: log.recent() }));
+    response.end(JSON.stringify({ runId, now: now(), signedPrices: Boolean(prices), events: log.recent() }));
+  };
+
+  // A failed fetch stays cached for its window too, so a paid source is never asked again sooner
+  const priceCache = new Map<string, { at: number; response: Promise<SignedResponse> }>();
+  const sendPrice = async (request: IncomingMessage, response: ServerResponse, asset: string) => {
+    const reply = (status: number, body: unknown) => {
+      response.writeHead(status, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+        ...SECURITY_HEADERS,
+        ...corsHeaders(request),
+      });
+      response.end(JSON.stringify(body));
+    };
+    if (!prices) return reply(404, { error: 'This agent serves no signed prices' });
+    if (!prices.assets.includes(asset)) return reply(400, { error: `Unknown asset "${asset}"` });
+    let cached = priceCache.get(asset);
+    if (!cached || Date.now() - cached.at >= priceCacheMs) {
+      cached = { at: Date.now(), response: prices.fetch(asset) };
+      cached.response.catch(() => {}); // answered below; this only keeps a rejection from going unhandled
+      priceCache.set(asset, cached);
+    }
+    try {
+      reply(200, { asset, response: await cached.response });
+    } catch (error) {
+      reply(502, { error: `No signed price for ${asset}: ${(error as Error).message}` });
+    }
   };
 
   const openStream = (request: IncomingMessage, response: ServerResponse) => {
@@ -86,13 +121,15 @@ export const startConsoleServer = ({
   clock.unref();
 
   const server = createServer(async (request, response) => {
-    const path = new URL(request.url ?? '/', 'http://localhost').pathname;
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    const path = url.pathname;
     if (request.method !== 'GET') {
       response.writeHead(405, { Allow: 'GET', ...SECURITY_HEADERS }).end();
       return;
     }
     if (path === '/api/state') return sendState(request, response);
     if (path === '/api/stream') return openStream(request, response);
+    if (path === '/api/signed-price') return sendPrice(request, response, url.searchParams.get('asset') ?? '');
     const asset = STATIC[path];
     if (!asset) {
       response.writeHead(404, { 'Content-Type': 'text/plain', ...SECURITY_HEADERS }).end('Not found');

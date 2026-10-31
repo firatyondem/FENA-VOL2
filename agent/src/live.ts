@@ -123,5 +123,5 @@ export const startLive = async ({ profiles, log, classifier }: LiveOptions) => {
   };
   await poll();
   const timers = [setInterval(poll, pollEverySec * 1000), setInterval(tick, 5000)];
-  return { now, stop: () => timers.forEach(clearInterval) };
+  return { now, fetchPrice, stop: () => timers.forEach(clearInterval) };
 };

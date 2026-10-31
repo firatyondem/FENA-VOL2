@@ -39,7 +39,9 @@ if (mode === 'replay') {
 } else if (mode === 'live') {
   const { startLive } = await import('./live.ts');
   const live = await startLive({ profiles, log, classifier });
-  await startConsoleServer({ log, now: live.now, port, allowedOrigins });
+  // The frontend's manual sell takes its signed price from the same source as the keeper
+  const prices = { assets: Object.keys(profiles.assets), fetch: live.fetchPrice };
+  await startConsoleServer({ log, now: live.now, port, allowedOrigins, prices });
 } else {
   throw new Error(`AGENT_MODE must be replay or live, not ${mode}`);
 }
