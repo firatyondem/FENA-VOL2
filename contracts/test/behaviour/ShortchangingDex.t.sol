@@ -30,7 +30,7 @@ contract ShortchangingDexTest is BehaviourBase {
         shortchanging.setShortfall(SHORTFALL_BPS, 0);
         uint256 triggerId = openEthTrigger("2000");
         vm.warp(block.timestamp + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
         uint256 promised = dex.quoteBuy(address(teth), 50e6, 2070e18);
         uint256 delivered = promised - promised * SHORTFALL_BPS / 10_000;
         Books memory before = books();
@@ -46,7 +46,7 @@ contract ShortchangingDexTest is BehaviourBase {
     function test_RevertWhen_TheDexDeliversLessThanItReturnsOnASell() public {
         uint256 positionId = buyEth();
         shortchanging.setShortfall(0, SHORTFALL_BPS);
-        IVault.SignedResponse memory price = signedPrice("2100");
+        bytes[] memory price = signedPrice("2100");
         uint256 promised = dex.quoteSell(address(teth), vault.getPosition(positionId).amount, 2100e18);
         uint256 delivered = promised - promised * SHORTFALL_BPS / 10_000;
         Books memory before = books();

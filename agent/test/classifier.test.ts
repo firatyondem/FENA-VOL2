@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildUserMessage, ClaudeClassifier, type ParseMessage, SYSTEM_PROMPT } from '../src/classifier/claude.ts';
 import { KeywordClassifier } from '../src/classifier/keyword.ts';
-import { type Candidate, prefilter, sanitize } from '../src/classifier/types.ts';
+import { TieredClassifier, VerdictCache } from '../src/classifier/tiered.ts';
+import { type Candidate, type Classification, type Classifier, type ModelUsage, prefilter, sanitize } from '../src/classifier/types.ts';
+import { openDb } from '../src/store/db.ts';
 
 const oil: Candidate = { asset: 'OIL', name: 'Crude oil', topics: ['Venezuela', 'Iran', 'OPEC', 'oil'] };
 const btc: Candidate = { asset: 'BTC', name: 'Bitcoin', topics: ['Bitcoin', 'crypto capital'] };
@@ -68,7 +70,9 @@ test('Claude gets the post as untrusted data, with low effort, structured output
     ),
   });
   const results = await classifier.classify(post('We are coming for Venezuela'), [oil]);
-  assert.deepEqual(results, [{ asset: 'OIL', relevant: true, confidence: 0.85, reason: 'Venezuela threat, oil supply' }]);
+  assert.deepEqual(results, [
+    { asset: 'OIL', relevant: true, confidence: 0.85, reason: 'Venezuela threat, oil supply', by: 'claude-opus-5-5' },
+  ]);
 
   const params = seen[0];
   assert.ok(params);
@@ -119,4 +123,76 @@ test('the user message lists each candidate with its topics', () => {
   assert.match(message, /- OIL \(Crude oil\): Venezuela, Iran, OPEC, oil/);
   assert.match(message, /- BTC \(Bitcoin\): Bitcoin, crypto capital/);
   assert.match(message, /Post by @realDonaldTrump/);
+});
+
+test('Haiku runs without fallbacks, which it does not support, and its tokens are metered', async () => {
+  const seen: Parameters<ParseMessage>[0][] = [];
+  const usage: ModelUsage[] = [];
+  const classifier = new ClaudeClassifier({
+    model: 'claude-haiku-5-5',
+    parse: fakeParse(
+      {
+        stop_reason: 'end_turn',
+        parsed_output: { results: [{ asset: 'OIL', relevant: true, confidence: 0.9, reason: 'oil' }] },
+        usage: { input_tokens: 1000, output_tokens: 200 },
+      },
+      seen
+    ),
+  });
+  await classifier.classify(post('Venezuela'), [oil], (call) => usage.push(call));
+  assert.equal(seen[0]?.fallbacks, undefined);
+  assert.equal(seen[0]?.betas, undefined);
+  // 1,000 input tokens at $0.10 and 200 output tokens at $0.50 per million
+  assert.deepEqual(usage, [{ model: 'claude-haiku-5-5', inputTokens: 1000, outputTokens: 200, usd: 0.0002 }]);
+});
+
+class Scripted implements Classifier {
+  readonly name: string;
+  calls: string[][] = [];
+  private readonly answer: (asset: string) => Classification;
+
+  constructor(name: string, answer: (asset: string) => Classification) {
+    this.name = name;
+    this.answer = answer;
+  }
+
+  async classify(_post: unknown, candidates: Candidate[]) {
+    this.calls.push(candidates.map((candidate) => candidate.asset));
+    return candidates.map((candidate) => ({ ...this.answer(candidate.asset), by: this.name }));
+  }
+}
+
+test('tiered: no topic word, no model call', async () => {
+  const small = new Scripted('small', (asset) => ({ asset, relevant: true, confidence: 0.9, reason: 'x' }));
+  const tiered = new TieredClassifier({ small });
+  const results = await tiered.classify({ ...post('Happy Thanksgiving!'), id: '1' }, [oil, btc]);
+  assert.equal(small.calls.length, 0);
+  assert.deepEqual(results.map((result) => result.by), ['keyword-filter', 'keyword-filter']);
+});
+
+test('tiered: the large model sees only the assets the small one is unsure about', async () => {
+  const small = new Scripted('small', (asset) =>
+    asset === 'OIL' ? { asset, relevant: true, confidence: 0.5, reason: 'maybe' } : { asset, relevant: false, confidence: 0.9, reason: 'no' }
+  );
+  const large = new Scripted('large', (asset) => ({ asset, relevant: true, confidence: 0.95, reason: 'yes' }));
+  const tiered = new TieredClassifier({ small, large });
+  const results = await tiered.classify({ ...post('Venezuela and Bitcoin'), id: '1' }, [oil, btc]);
+  assert.deepEqual(large.calls, [['OIL']]);
+  assert.deepEqual(
+    results.map(({ asset, by }) => [asset, by]),
+    [
+      ['OIL', 'large'],
+      ['BTC', 'small'],
+    ]
+  );
+});
+
+test('tiered: a post is never classified twice, also across restarts', async () => {
+  const db = openDb();
+  const small = new Scripted('small', (asset) => ({ asset, relevant: true, confidence: 0.9, reason: 'oil' }));
+  await new TieredClassifier({ small, cache: new VerdictCache(db) }).classify({ ...post('Venezuela'), id: '7' }, [oil]);
+  // A new classifier on the same database file, as after a restart
+  const again = await new TieredClassifier({ small, cache: new VerdictCache(db) }).classify({ ...post('Venezuela'), id: '7' }, [oil]);
+  assert.equal(small.calls.length, 1);
+  assert.deepEqual(again, [{ asset: 'OIL', relevant: true, confidence: 0.9, reason: 'oil', by: 'cache' }]);
 });

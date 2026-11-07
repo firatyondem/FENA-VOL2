@@ -1,0 +1,258 @@
+[
+  {
+    "type": "constructor",
+    "inputs": [
+      {
+        "name": "singleUpdateFeeInWei_",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getUpdateFee",
+    "inputs": [
+      {
+        "name": "updateData",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "parsePriceFeedUpdates",
+    "inputs": [
+      {
+        "name": "updateData",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
+      },
+      {
+        "name": "priceIds",
+        "type": "bytes32[]",
+        "internalType": "bytes32[]"
+      },
+      {
+        "name": "minPublishTime",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "maxPublishTime",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple[]",
+        "internalType": "struct PythStructs.PriceFeed[]",
+        "components": [
+          {
+            "name": "id",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "price",
+            "type": "tuple",
+            "internalType": "struct PythStructs.Price",
+            "components": [
+              {
+                "name": "price",
+                "type": "int64",
+                "internalType": "int64"
+              },
+              {
+                "name": "conf",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "expo",
+                "type": "int32",
+                "internalType": "int32"
+              },
+              {
+                "name": "publishTime",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
+          },
+          {
+            "name": "emaPrice",
+            "type": "tuple",
+            "internalType": "struct PythStructs.Price",
+            "components": [
+              {
+                "name": "price",
+                "type": "int64",
+                "internalType": "int64"
+              },
+              {
+                "name": "conf",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "expo",
+                "type": "int32",
+                "internalType": "int32"
+              },
+              {
+                "name": "publishTime",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "parsePriceFeedUpdatesUnique",
+    "inputs": [
+      {
+        "name": "updateData",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
+      },
+      {
+        "name": "priceIds",
+        "type": "bytes32[]",
+        "internalType": "bytes32[]"
+      },
+      {
+        "name": "minPublishTime",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "maxPublishTime",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple[]",
+        "internalType": "struct PythStructs.PriceFeed[]",
+        "components": [
+          {
+            "name": "id",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "price",
+            "type": "tuple",
+            "internalType": "struct PythStructs.Price",
+            "components": [
+              {
+                "name": "price",
+                "type": "int64",
+                "internalType": "int64"
+              },
+              {
+                "name": "conf",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "expo",
+                "type": "int32",
+                "internalType": "int32"
+              },
+              {
+                "name": "publishTime",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
+          },
+          {
+            "name": "emaPrice",
+            "type": "tuple",
+            "internalType": "struct PythStructs.Price",
+            "components": [
+              {
+                "name": "price",
+                "type": "int64",
+                "internalType": "int64"
+              },
+              {
+                "name": "conf",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "expo",
+                "type": "int32",
+                "internalType": "int32"
+              },
+              {
+                "name": "publishTime",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "setFee",
+    "inputs": [
+      {
+        "name": "fee",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "singleUpdateFeeInWei",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "error",
+    "name": "InsufficientFee",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "PriceFeedNotFoundWithinRange",
+    "inputs": []
+  }
+]

@@ -1,0 +1,44 @@
+# The agent on Fly.io: one small always-on machine with a 1 GB volume for the SQLite database and the event log, about
+# $3 a month (shared-cpu-1x, 512 MB). Deploy from the repository root:
+#   fly launch --no-deploy --copy-config        (once; pick the app name)
+#   fly volumes create fena_data --size 1 --region fra
+#   fly secrets set AGENT_PRIVATE_KEY=0x... PYTH_API_KEY=... GETXAPI_KEY=... ANTHROPIC_API_KEY=... \
+#     RPC_URL=https://... FAUCET_PRIVATE_KEY=0x... CONSOLE_ALLOWED_ORIGINS=https://<the website's origin>
+#   fly deploy
+# Fly terminates HTTPS; the API answers only the origins in CONSOLE_ALLOWED_ORIGINS.
+app = "fena-agent"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  AGENT_MODE = "live"
+  CHAIN_ID = "84532"
+  POST_SOURCE = "getxapi"
+  CONSOLE_HOST = "0.0.0.0"
+  PORT = "8080"
+  DATA_DIR = "/data"
+
+[mounts]
+  source = "fena_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # The agent polls and keeps open triggers on its own clock, so it must never sleep
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/api/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "60s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

@@ -9,8 +9,8 @@ import {MockUSDC} from "./MockUSDC.sol";
 /// @notice There is no pool and no slippage. A buy takes mock USDC and mints the asset token at exactly `price`, a sell
 /// takes the asset token, burns it and mints mock USDC at exactly `price`. The DEX trusts the price it is given and holds
 /// no liquidity, so, as IMockDEX says, anyone may call it: every token here is a worthless testnet mock, and the vault
-/// checks every signed price before it gets here.
-/// @dev Prices are USD per whole asset token with 18 decimals, as ProjectedJson.readUint(data, "price", 18) reads them.
+/// has Pyth verify every price before it gets here.
+/// @dev Prices are USD per whole asset token with 18 decimals, as the vault scales a Pyth price.
 contract MockDEX is IMockDEX {
     uint8 public constant PRICE_DECIMALS = 18;
 

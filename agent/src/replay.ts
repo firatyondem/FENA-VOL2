@@ -1,58 +1,94 @@
-// The stage replay: the real engine, classifier and keeper against the SimVault, fed with the signed fixture posts and
-// prices signed on the fly by the public fixture key, on a clock that runs faster than real time. It needs no keys and
-// no chain, and shows one valid run and the four tamper rejections.
-import { readFileSync } from 'node:fs';
-import { privateKeyToAccount } from 'viem/accounts';
-import { deriveRequestHash, type SignedResponse } from './airnode/attestation.ts';
-import { signResponse } from './airnode/sign.ts';
+// The stage replay: the real engine, classifier and keeper against the SimVault, fed with scripted posts and Pyth price
+// paths on a clock that runs faster than real time. It needs no keys and no chain, and shows one valid run and the four
+// tamper rejections. The updates are LocalPyth's unsigned ones; the deployed vault has the real Pyth contract check
+// signatures (contracts/test/fork/PythFork.t.sol runs real ones).
+import type { Address } from 'viem';
 import { SimVault } from './chain/sim-vault.ts';
 import { type Rule, VaultRejection } from './chain/vault.ts';
 import type { Classifier } from './classifier/types.ts';
+import type { CostRecorder } from './engine/costs.ts';
 import { SellKeeper } from './engine/keeper.ts';
 import { TriggerEngine } from './engine/trigger-engine.ts';
 import type { EventLog } from './log.ts';
-import { getAsset, priceRequest, type Profiles } from './profiles.ts';
-import type { WatchedAccount } from './sources/twitter.ts';
-import { FIXTURE_AIRNODE_KEY, P0_TIME, TWEET_TIME } from '../scripts/fixture-set.ts';
+import { getAsset, type Profiles } from './profiles.ts';
+import type { PriceUpdate } from './pyth/hermes.ts';
+import { ScriptedPriceSource, usd8 } from './pyth/price-source.ts';
+import { isNewer, type Post, type PostSource, snowflakeAt, type WatchedAccount } from './sources/posts.ts';
+import type { DecisionLog } from './store/decisions.ts';
 
-const FIXTURES = new URL('../../shared/fixtures/synthetic/', import.meta.url);
-const readFixture = (file: string) => JSON.parse(readFileSync(new URL(file, FIXTURES), 'utf8')) as SignedResponse;
+// 2026-10-30T17:20:00Z, when both replay posts go out
+export const TWEET_TIME = 1793380800;
+const REPLAY_AGENT: Address = '0x00000000000000000000000000000000000fe4a0';
 
 export const REPLAY_ACCOUNTS: WatchedAccount[] = [
-  { handle: 'realDonaldTrump', label: 'Donald Trump', assets: ['OIL', 'BTC', 'ETH'], pinned: false },
-  { handle: 'elonmusk', label: 'Elon Musk', assets: ['DOGE', 'TSLA'], pinned: false },
+  { handle: 'realDonaldTrump', label: 'Donald Trump', assets: ['OIL', 'BTC', 'ETH'] },
+  { handle: 'elonmusk', label: 'Elon Musk', assets: ['DOGE', 'TSLA'] },
 ];
 
-const POSTS: Record<string, string> = {
-  realDonaldTrump: 'tweet-trump-venezuela.json',
-  elonmusk: 'tweet-musk-doge.json',
-};
+export const REPLAY_POSTS: Post[] = [
+  {
+    id: snowflakeAt(TWEET_TIME, 1n),
+    author: 'realDonaldTrump',
+    text: 'We are coming for Venezuela. Big things are happening!',
+    createdAt: TWEET_TIME,
+    isRepost: false,
+  },
+  {
+    id: snowflakeAt(TWEET_TIME, 2n),
+    author: 'elonmusk',
+    text: 'Ðogecoin is the people’s crypto',
+    createdAt: TWEET_TIME,
+    isRepost: false,
+  },
+];
 
 // Price paths in USD, by seconds after the posts: oil rises past its threshold, then on to take profit
 const PRICE_PATH: Record<string, [after: number, price: string][]> = {
   OIL: [
-    [0, '70.25'],
+    [-60, '70.25'],
     [330, '71.4'],
     // +8.1% on the 71.4 entry: take profit
     [700, '77.2'],
   ],
   ETH: [
-    [0, '2000'],
+    [-60, '2000'],
     [330, '2004'],
   ],
   DOGE: [
-    [0, '0.07584'],
+    [-60, '0.07584'],
     [330, '0.0799'],
   ],
-  BTC: [[0, '77000']],
+  BTC: [[-60, '77000']],
 };
 
-const priceAt = (asset: string, now: number) => {
-  const path = PRICE_PATH[asset] ?? [];
-  return path.filter(([after]) => now - TWEET_TIME >= after).at(-1)?.[1];
-};
+const pricePaths = () =>
+  Object.fromEntries(
+    Object.entries(PRICE_PATH).map(([asset, path]) => [
+      asset,
+      path.map(([after, price]) => [TWEET_TIME + after, usd8(price)] as [number, bigint]),
+    ])
+  );
 
-export const replayRule = (profiles: Profiles, agent: `0x${string}`): Rule => {
+// The scripted posts, each visible once its time has come
+export class ScriptedPostSource implements PostSource {
+  readonly name = 'replay';
+  private readonly posts: readonly Post[];
+  private readonly now: () => number;
+
+  constructor(posts: readonly Post[], now: () => number) {
+    this.posts = posts;
+    this.now = now;
+  }
+
+  async fetchNewPosts(account: WatchedAccount, sinceId?: string) {
+    const posts = this.posts.filter(
+      (post) => post.author === account.handle && post.createdAt <= this.now() && isNewer(post.id, sinceId)
+    );
+    return { posts, cost: { calls: 1, items: posts.length, usd: 0 } };
+  }
+}
+
+export const replayRule = (profiles: Profiles, agent: Address): Rule => {
   const sell = { takeProfitBps: 800, stopLossBps: 500, stagnationBandBps: 100, stagnationAfterSec: 600 };
   const demo = (asset: string, budgetShareBps: number) => {
     const profile = getAsset(profiles, asset);
@@ -67,7 +103,7 @@ export const replayRule = (profiles: Profiles, agent: `0x${string}`): Rule => {
       ...sell,
     };
   };
-  // 500 USDC a buy, a 2,000 USDC day split 50 / 30 / 20 (spec: 5% per trade and 20% a day of a 10,000 USDC vault)
+  // 500 USDC a buy, a 2,000 USDC day split 50 / 30 / 20 (5% per trade and 20% a day of a 10,000 USDC vault)
   return {
     id: 'demo-1',
     owner: agent,
@@ -82,39 +118,39 @@ export const replayRule = (profiles: Profiles, agent: `0x${string}`): Rule => {
   };
 };
 
-// The spec's four tamper tests against a fresh vault: open a trigger, then try to confirm it with each forgery.
+// The tamper test against a fresh vault: open a trigger, then try to confirm it with an edited, an old and another
+// asset's price, and open a second trigger with the first one's P0.
 export const runTamperBench = async (profiles: Profiles, log: EventLog) => {
-  const airnode = privateKeyToAccount(FIXTURE_AIRNODE_KEY).address;
-  const clock = { now: P0_TIME + 60 };
-  const rule: Rule = { ...replayRule(profiles, airnode), id: 'bench' };
-  rule.assets = rule.assets.map((asset) => (asset.asset === 'ETH' ? { ...asset, trendThresholdBps: 300 } : asset));
+  const clock = { now: TWEET_TIME + 60 };
+  const rule: Rule = { ...replayRule(profiles, REPLAY_AGENT), id: 'bench', accounts: { realDonaldTrump: ['ETH'] } };
   const vault = new SimVault({
     profiles,
-    rules: [{ ...rule, accounts: { realDonaldTrump: ['ETH'] } }],
+    rules: [rule],
     deposits: { bench: 1_000n * 10n ** 6n },
-    caller: airnode,
-    tweetAirnode: airnode,
-    priceAirnodes: { ETH: airnode, BTC: airnode },
+    caller: REPLAY_AGENT,
     now: () => clock.now,
   });
-  const { triggerId } = await vault.openTrigger({
-    ruleId: 'bench',
-    asset: 'ETH',
-    account: 'realDonaldTrump',
-    post: readFixture('tweet-trump-venezuela.json'),
-    p0: readFixture('eth-p0.json'),
-  });
-  clock.now = P0_TIME + 320;
-  const cases: [name: string, file: string, expected: string][] = [
-    ['Edited value', 'tamper-edited-value.json', 'NotSignedByAirnode'],
-    ['Stale response', 'tamper-stale.json', 'ResponseTooOld'],
-    ['Different request', 'tamper-different-request.json', 'WrongRequestHash'],
-    ['Wrong signer', 'tamper-wrong-signer.json', 'NotSignedByAirnode'],
+  const prices = new ScriptedPriceSource(profiles, pricePaths(), () => clock.now);
+  const p0 = prices.updateAt('ETH', TWEET_TIME);
+  const post = (sequence: bigint) => snowflakeAt(TWEET_TIME, sequence);
+  const { triggerId } = await vault.openTrigger({ ruleId: 'bench', asset: 'ETH', account: 'realDonaldTrump', postId: post(1n), p0 });
+  clock.now = TWEET_TIME + 330;
+
+  const edited: PriceUpdate = { updates: [prices.updateAt('ETH', clock.now).updates[0]?.slice(0, -2) as `0x${string}`], prices: [] };
+  const cases: [name: string, expected: string, attempt: () => Promise<unknown>][] = [
+    ['Edited price', 'InvalidPriceUpdate', () => vault.confirmTrigger(triggerId, edited)],
+    ['Old price', 'PriceTooOld', () => vault.confirmTrigger(triggerId, prices.updateAt('ETH', clock.now - 360))],
+    ['Wrong asset', 'WrongPriceFeed', () => vault.confirmTrigger(triggerId, prices.updateAt('BTC', clock.now))],
+    [
+      'Replayed price',
+      'PriceAlreadyUsed',
+      () => vault.openTrigger({ ruleId: 'bench', asset: 'ETH', account: 'realDonaldTrump', postId: post(2n), p0 }),
+    ],
   ];
-  for (const [name, file, expected] of cases) {
+  for (const [name, expected, attempt] of cases) {
     let actual = 'accepted';
     try {
-      await vault.confirmTrigger(triggerId, readFixture(file));
+      await attempt();
     } catch (error) {
       actual = error instanceof VaultRejection ? error.reason : String(error);
     }
@@ -131,44 +167,48 @@ export interface ReplayOptions {
   tickMs?: number;
   // Receives the replay clock before the first event, so the log can stamp events with it
   onClock?: (now: () => number) => void;
+  decisions?: DecisionLog;
+  costs?: CostRecorder;
 }
 
-export const startReplay = async ({ profiles, log, classifier, speed = 10, tickMs = 250, onClock }: ReplayOptions) => {
-  const airnode = privateKeyToAccount(FIXTURE_AIRNODE_KEY).address;
+export const startReplay = async ({
+  profiles,
+  log,
+  classifier,
+  speed = 10,
+  tickMs = 250,
+  onClock,
+  decisions,
+  costs,
+}: ReplayOptions) => {
   const startedAt = Date.now();
   const origin = TWEET_TIME + 150;
   const now = () => Math.floor(origin + ((Date.now() - startedAt) / 1000) * speed);
   onClock?.(now);
 
-  const rule = replayRule(profiles, airnode);
+  const rule = replayRule(profiles, REPLAY_AGENT);
   const vault = new SimVault({
     profiles,
     rules: [rule],
     deposits: { [rule.id]: 10_000n * 10n ** 6n },
-    caller: airnode,
-    tweetAirnode: airnode,
-    priceAirnodes: Object.fromEntries(Object.keys(PRICE_PATH).map((asset) => [asset, airnode])),
+    caller: REPLAY_AGENT,
     now,
   });
-  const fetchPrice = async (asset: string) => {
-    const price = priceAt(asset, now());
-    if (!price) throw new Error(`No replay price for ${asset}`);
-    const at = now();
-    const hash = deriveRequestHash(priceRequest(getAsset(profiles, asset)));
-    return signResponse(FIXTURE_AIRNODE_KEY, hash, at, `{"price":${price},"updatedAt":${at * 1000}}`);
-  };
+  const prices = new ScriptedPriceSource(profiles, pricePaths(), now);
+  const posts = new ScriptedPostSource(REPLAY_POSTS, now);
   const engine = new TriggerEngine({
     profiles,
     vault,
     classifier,
+    posts,
+    prices,
     log,
     now,
-    tweetAirnode: airnode,
-    fetchLatestPost: async (account) => readFixture(POSTS[account.handle] as string),
-    fetchPrice,
     p1IntervalSec: 30,
+    ...(decisions ? { decisions } : {}),
+    ...(costs ? { costs } : {}),
   });
-  const keeper = new SellKeeper({ profiles, vault, log, now, fetchPrice });
+  const keeper = new SellKeeper({ profiles, vault, log, now, prices, ...(costs ? { costs } : {}) });
 
   log.append({
     kind: 'agent.started',
@@ -191,5 +231,5 @@ export const startReplay = async ({ profiles, log, classifier, speed = 10, tickM
       busy = false;
     }
   }, tickMs);
-  return { now, engine, vault, stop: () => clearInterval(timer) };
+  return { now, engine, vault, prices, stop: () => clearInterval(timer) };
 };

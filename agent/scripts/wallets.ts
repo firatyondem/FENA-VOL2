@@ -1,26 +1,19 @@
-// Shows the agent's two wallets and whether they can run: the agent wallet pays the gas of its vault transactions, the
-// payer wallet pays aUSD for data. Run with `npm run wallets`. It reads the keys from agent/.env, derives the addresses
-// and prints addresses only, never a key.
+// Shows the agent's wallets and whether they can run: the agent wallet pays the gas and Pyth's fees of its vault
+// transactions, and the optional faucet wallet funds demo users. Data (posts, model calls) is paid by API key, in USD.
+// Run with `npm run wallets`. It reads the keys from agent/.env, derives the addresses and prints addresses only, never a
+// key. It also estimates what polling the watched accounts costs a day on the smart-poll schedule.
 import { existsSync, readFileSync } from 'node:fs';
-import {
-  type Address,
-  createPublicClient,
-  createWalletClient,
-  formatEther,
-  formatUnits,
-  type Hex,
-  http,
-  isAddressEqual,
-  isHex,
-} from 'viem';
+import { type Address, createPublicClient, createWalletClient, formatEther, type Hex, http, isAddressEqual, isHex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { baseSepolia, foundry } from 'viem/chains';
-import { AUSD_DECIMALS, readAusdBalance, TWEET_PRICE_AUSD } from '../src/airnode/client.ts';
 import { ViemVault } from '../src/chain/viem-vault.ts';
 import { readBudgetSettings } from '../src/engine/budget.ts';
-import { redactUrls } from '../src/log.ts';
+import { readPollSchedule, type PollScheduleSettings } from '../src/engine/poll-schedule.ts';
 import { activeWatchSet } from '../src/engine/watch-set.ts';
+import { redactUrls } from '../src/log.ts';
 import { loadProfiles } from '../src/profiles.ts';
+import { GETXAPI_USD_PER_CALL } from '../src/sources/getxapi.ts';
+import { TWITTERAPI_IO_USD_PER_TWEET } from '../src/sources/twitterapi-io.ts';
 import { loadWatchlist } from '../src/sources/watchlist.ts';
 
 export const addressLink = (address: Address) => `https://sepolia.basescan.org/address/${address}`;
@@ -37,7 +30,7 @@ export const describeRpcError = (error: unknown) => {
 
 export interface WalletReport {
   agent?: { address: Address; eth: bigint };
-  payer?: { address: Address; ausd: bigint };
+  faucet?: { address: Address; eth: bigint };
   // Users whose rule names the agent wallet; undefined when the vault could not be read
   rulesNamingAgent?: number;
   // Why the rules could not be read
@@ -47,8 +40,6 @@ export interface WalletReport {
 export interface WalletLimits {
   // Wei
   minEth: bigint;
-  // aUSD with 6 decimals
-  minAusd: bigint;
 }
 
 export interface Check {
@@ -56,41 +47,27 @@ export interface Check {
   message: string;
 }
 
-// The same minimums as the agent's budget: AGENT_MIN_ETH and PAYER_MIN_AUSD
-export const walletLimits = (env: NodeJS.ProcessEnv = process.env): WalletLimits => {
-  const { minEth, minAusd } = readBudgetSettings(env);
-  return { minEth, minAusd };
-};
+// The same minimum as the agent's budget: AGENT_MIN_ETH
+export const walletLimits = (env: NodeJS.ProcessEnv = process.env): WalletLimits => ({
+  minEth: readBudgetSettings(env).minEth,
+});
 
 export const checkWallets = (report: WalletReport, limits: WalletLimits): Check[] => {
-  const { agent, payer } = report;
+  const { agent, faucet } = report;
   const checks: Check[] = [];
   checks.push(
     agent
       ? {
           ok: agent.eth >= limits.minEth,
-          message: `agent wallet holds ${formatEther(agent.eth)} ETH, needs at least ${formatEther(limits.minEth)} for gas`,
+          message: `agent wallet holds ${formatEther(agent.eth)} ETH, needs at least ${formatEther(limits.minEth)} for gas and Pyth's fees`,
         }
       : { ok: false, message: 'AGENT_PRIVATE_KEY is not set in agent/.env' }
   );
-  checks.push(
-    payer
-      ? {
-          ok: payer.ausd >= limits.minAusd,
-          message: `payer wallet holds ${formatUnits(payer.ausd, AUSD_DECIMALS)} aUSD, needs at least ${formatUnits(limits.minAusd, AUSD_DECIMALS)} for data`,
-        }
-      : { ok: false, message: 'PAYER_PRIVATE_KEY is not set in agent/.env' }
-  );
-  if (agent && payer) {
-    checks.push(
-      isAddressEqual(agent.address, payer.address)
-        ? {
-            ok: false,
-            message:
-              'agent and payer are the same wallet: use two, so a stolen agent key cannot spend data money and the other way round',
-          }
-        : { ok: true, message: 'agent and payer are different wallets' }
-    );
+  if (agent && faucet && isAddressEqual(agent.address, faucet.address)) {
+    checks.push({
+      ok: false,
+      message: 'agent and faucet are the same wallet: use two, so demo users cannot drain the gas the agent needs',
+    });
   }
   if (report.rulesNamingAgent === undefined) {
     checks.push({ ok: false, message: `could not read the rules: ${report.rulesUnavailable ?? 'unknown reason'}` });
@@ -106,13 +83,25 @@ export const checkWallets = (report: WalletReport, limits: WalletLimits): Check[
   return checks;
 };
 
-// One paid tweet call per watched account per poll
-export const paidCallsPerHour = (accounts: number, pollIntervalSec: number) =>
-  pollIntervalSec > 0 ? (accounts * 3600) / pollIntervalSec : 0;
+// Polls of one account in a week on the schedule: active through market hours (6.5 h on weekdays), quiet the rest. Posts
+// make it busier; a long silence makes it idler, so this is the quiet-account case.
+export const pollsPerDay = (settings: PollScheduleSettings): number => {
+  const [open = '09:30', close = '16:00'] = settings.marketHours.split('-');
+  const minutes = (hhmm: string) => {
+    const [h = '0', m = '0'] = hhmm.split(':');
+    return Number(h) * 60 + Number(m);
+  };
+  const marketSec = Math.max(0, minutes(close) - minutes(open)) * 60;
+  const weekSec = 7 * 86_400;
+  const activeSec = 5 * marketSec;
+  const perWeek = activeSec / settings.activeSec + (weekSec - activeSec) / settings.idleSec;
+  return perWeek / 7;
+};
 
-// Hours the payer's aUSD lasts at `callsPerHour` tweet calls; undefined when the agent makes no paid call
-export const estimateRuntimeHours = (ausd: bigint, callsPerHour: number, pricePerCall: bigint = TWEET_PRICE_AUSD) =>
-  callsPerHour > 0 ? Number(ausd) / (callsPerHour * Number(pricePerCall)) : undefined;
+// USD a day to poll `accounts` accounts with no new posts: GetXAPI bills each call, TwitterAPI.io an empty page as one
+// post
+export const pollUsdPerDay = (source: string, accounts: number, settings: PollScheduleSettings) =>
+  accounts * pollsPerDay(settings) * (source === 'twitterapi.io' ? TWITTERAPI_IO_USD_PER_TWEET : GETXAPI_USD_PER_CALL);
 
 const keyAddress = (env: NodeJS.ProcessEnv, name: string): Address | undefined => {
   const key = env[name];
@@ -126,22 +115,13 @@ if (import.meta.main) {
   const chain = Number(env.CHAIN_ID ?? baseSepolia.id) === foundry.id ? foundry : baseSepolia;
   const rpcUrl = env.RPC_URL || (chain.id === foundry.id ? 'http://127.0.0.1:8545' : 'https://sepolia.base.org');
   const client = createPublicClient({ chain, transport: http(rpcUrl) });
-  // aUSD lives on Base Sepolia, where the Airnodes take payment, whichever chain the vault is on
-  const ausdClient =
-    chain.id === baseSepolia.id
-      ? client
-      : createPublicClient({ chain: baseSepolia, transport: http(env.AUSD_RPC_URL || 'https://sepolia.base.org') });
 
   const agentAddress = keyAddress(env, 'AGENT_PRIVATE_KEY');
-  const payerAddress = keyAddress(env, 'PAYER_PRIVATE_KEY');
+  const faucetAddress = keyAddress(env, 'FAUCET_PRIVATE_KEY');
   const report: WalletReport = {};
-  let payerEth = 0n;
   try {
     if (agentAddress) report.agent = { address: agentAddress, eth: await client.getBalance({ address: agentAddress }) };
-    if (payerAddress) {
-      report.payer = { address: payerAddress, ausd: await readAusdBalance(ausdClient, payerAddress) };
-      payerEth = await ausdClient.getBalance({ address: payerAddress });
-    }
+    if (faucetAddress) report.faucet = { address: faucetAddress, eth: await client.getBalance({ address: faucetAddress }) };
   } catch (error) {
     console.log(`✖ could not read the wallet balances: ${describeRpcError(error)}`);
     process.exit(1);
@@ -176,28 +156,24 @@ if (import.meta.main) {
 
   console.log(`Chain ${chain.name} (${chain.id}), RPC ${new URL(rpcUrl).host}`);
   if (report.agent) {
-    console.log(`Agent wallet  ${report.agent.address}  ${addressLink(report.agent.address)}`);
-    console.log(`              ${formatEther(report.agent.eth)} ETH (gas for confirmTrigger, buys, expiries and sells)`);
+    console.log(`Agent wallet   ${report.agent.address}  ${addressLink(report.agent.address)}`);
+    console.log(`               ${formatEther(report.agent.eth)} ETH (gas and Pyth's fees)`);
   }
-  if (report.payer) {
-    console.log(`Payer wallet  ${report.payer.address}  ${addressLink(report.payer.address)}`);
-    console.log(`              ${formatUnits(report.payer.ausd, AUSD_DECIMALS)} aUSD (data), ${formatEther(payerEth)} ETH (not needed)`);
+  if (report.faucet) {
+    console.log(`Faucet wallet  ${report.faucet.address}  ${addressLink(report.faucet.address)}`);
+    console.log(`               ${formatEther(report.faucet.eth)} ETH for demo users`);
   }
 
   const checks = checkWallets(report, walletLimits(env));
   for (const check of checks) console.log(`${check.ok ? '✔' : '✖'} ${check.message}`);
 
-  const pollIntervalSec = Number(env.POLL_INTERVAL_SEC || 60);
+  const schedule = readPollSchedule(env);
+  const source = env.POST_SOURCE || 'getxapi';
   const accounts = watched ?? watchlist.map((account) => account.handle);
-  const callsPerHour = paidCallsPerHour(accounts.length, pollIntervalSec);
-  const source = watched ? 'active watch set' : 'whole watchlist, rules unknown';
+  const which = watched ? 'active watch set' : 'whole watchlist, rules unknown';
   console.log(
-    `Paid polls: ${accounts.length} account(s) (${source}: ${accounts.join(', ') || 'none'}) every ${pollIntervalSec} s = ` +
-      `${callsPerHour} calls/h, ${formatUnits(BigInt(Math.round(callsPerHour * Number(TWEET_PRICE_AUSD))), AUSD_DECIMALS)} aUSD/h`
+    `Polls: ${accounts.length} account(s) (${which}: ${accounts.join(', ') || 'none'}), about ` +
+      `${pollsPerDay(schedule).toFixed(0)} a day each on the schedule = $${pollUsdPerDay(source, accounts.length, schedule).toFixed(3)}/day on ${source}`
   );
-  if (report.payer) {
-    const hours = estimateRuntimeHours(report.payer.ausd, callsPerHour);
-    console.log(hours === undefined ? 'Estimated runtime: no paid polls, so the aUSD lasts' : `Estimated runtime left: ${hours.toFixed(1)} h`);
-  }
   if (checks.some((check) => !check.ok)) process.exitCode = 1;
 }

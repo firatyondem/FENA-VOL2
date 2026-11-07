@@ -23,32 +23,10 @@ abstract contract UnitBase is RealMocksBase {
         vault.setRule(rule_, one(ETH), oneRule(assetRule), topics(1), watched());
     }
 
-    /// @dev A post of ACCOUNT created at `createdAt`, which the tweet Airnode signed at `signedAt`
-    function signedTweetSignedAt(uint256 createdAt, uint256 signedAt)
-        internal
-        view
-        returns (IVault.SignedResponse memory)
-    {
-        bytes memory data = bytes(string.concat('{"id":"', vm.toString(tweetIdAt(createdAt)), '"}'));
-        return sign(tweetAirnodeKey, ACCOUNT, signedAt, data);
-    }
-
-    /// @dev An ETH price that the source took at `updatedAt` and the price Airnode signed at `signedAt`
-    function signedPriceSignedAt(string memory price, uint256 updatedAt, uint256 signedAt)
-        internal
-        view
-        returns (IVault.SignedResponse memory)
-    {
-        return sign(priceAirnodeKey, ETH_PRICE_REQUEST, signedAt, priceData(price, updatedAt));
-    }
-
     /// @dev Opens an ETH trigger for the user as the agent
-    function openWith(IVault.SignedResponse memory tweet, IVault.SignedResponse memory p0)
-        internal
-        returns (uint256 triggerId)
-    {
+    function openWith(Post memory tweet, bytes[] memory p0) internal returns (uint256 triggerId) {
         vm.prank(agent);
-        triggerId = vault.openTrigger(user, ETH, tweet, p0);
+        triggerId = openTriggerWith(user, ETH, tweet, p0);
     }
 
     /// @dev Opens an ETH trigger for a post one minute before P0, and returns t0, the time P0 was taken
@@ -57,10 +35,10 @@ abstract contract UnitBase is RealMocksBase {
         t0 = block.timestamp;
     }
 
-    /// @dev Warps to `t1` and confirms the trigger with a P1 that the source took and the Airnode signed then
+    /// @dev Warps to `t1` and confirms the trigger with a P1 published then
     function confirmAt(uint256 triggerId, uint256 t1, string memory p1) internal returns (uint256 positionId) {
         vm.warp(t1);
-        IVault.SignedResponse memory response = signedPrice(p1);
+        bytes[] memory response = signedPrice(p1);
         positionId = vault.confirmTrigger(triggerId, response);
     }
 

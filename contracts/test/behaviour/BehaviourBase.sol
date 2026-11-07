@@ -3,8 +3,6 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
-import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {IVault} from "../../src/interfaces/IVault.sol";
 import {MockAssetToken} from "../../src/mocks/MockAssetToken.sol";
 import {MockDEX} from "../../src/mocks/MockDEX.sol";
@@ -34,11 +32,11 @@ abstract contract BehaviourBase is RealMocksBase {
 
     /// @dev Deploys a vault on `dex_` with the base's profiles and accounts, funds the user and sets the ETH rule
     function deployVaultOn(address dex_) internal {
-        vault = new Vault(address(this), dex_);
+        vault = new Vault(address(this), dex_, address(pyth));
         vault.setAssetProfile(ETH, ethProfile());
         vault.setAssetProfile(OIL, oilProfile());
-        vault.setWatchableAccount(ACCOUNT, tweetAirnode);
-        vault.setWatchableAccount(OTHER_ACCOUNT, tweetAirnode);
+        vault.setWatchableAccount(ACCOUNT, true);
+        vault.setWatchableAccount(OTHER_ACCOUNT, true);
         fund(user, 1_000e6);
         vm.prank(user);
         setEthRule(ethRule());
@@ -78,7 +76,7 @@ abstract contract BehaviourBase is RealMocksBase {
     }
 
     /// @dev Opens an ETH trigger at P0 = 2000 and returns a P1 of 2070 (+3.5%) signed 31 minutes later
-    function openAndWait() internal returns (uint256 triggerId, IVault.SignedResponse memory p1) {
+    function openAndWait() internal returns (uint256 triggerId, bytes[] memory p1) {
         triggerId = openEthTrigger("2000");
         vm.warp(block.timestamp + 31 minutes);
         p1 = signedPrice("2070");
@@ -93,13 +91,6 @@ abstract contract BehaviourBase is RealMocksBase {
         assertTrue(reenterer.attempted(), "callback attempted");
         assertFalse(reenterer.callSucceeded(), "callback succeeded");
         assertEq(reenterer.returnData(), expectedError, "callback error");
-    }
-
-    /// @dev The address that signed a response, recovered with OpenZeppelin's ECDSA instead of the vault's library, so a
-    /// NotSignedByAirnode expectation can name the exact signer
-    function signerOf(IVault.SignedResponse memory response) internal pure returns (address) {
-        bytes32 digest = keccak256(abi.encodePacked(response.requestHash, response.timestamp, response.data));
-        return ECDSA.recover(MessageHashUtils.toEthSignedMessageHash(digest), response.signature);
     }
 
     function books() internal view returns (Books memory) {
@@ -128,21 +119,5 @@ abstract contract BehaviourBase is RealMocksBase {
 
     function assertPositionOpen(uint256 positionId, bool isOpen) internal view {
         assertEq(vault.getPosition(positionId).isOpen, isOpen, "position open");
-    }
-
-    /// @dev A signed response as the agent's fetch-response saves it in shared/fixtures/
-    function readFixture(string memory path) internal view returns (IVault.SignedResponse memory) {
-        // forge-lint: disable-next-line(unsafe-cheatcode)
-        string memory json = vm.readFile(path);
-        return IVault.SignedResponse({
-            requestHash: vm.parseJsonBytes32(json, ".requestHash"),
-            timestamp: vm.parseJsonUint(json, ".timestamp"),
-            data: bytes(vm.parseJsonString(json, ".data")),
-            signature: vm.parseJsonBytes(json, ".signature")
-        });
-    }
-
-    function responseHash(IVault.SignedResponse memory response) internal pure returns (bytes32) {
-        return keccak256(abi.encode(response.requestHash, response.timestamp, response.data));
     }
 }

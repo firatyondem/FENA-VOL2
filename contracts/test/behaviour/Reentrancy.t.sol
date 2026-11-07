@@ -29,7 +29,7 @@ contract ReentrantDexTest is BehaviourBase {
     // ---------------------------------------------------------------------------------------------------------------
 
     function test_RevertWhen_TheDexReentersWithdrawDuringABuy() public {
-        (uint256 triggerId, IVault.SignedResponse memory p1) = openAndWait();
+        (uint256 triggerId, bytes[] memory p1) = openAndWait();
         reentrant.arm(ReentrantDEX.buy.selector, address(vault), abi.encodeCall(IVault.withdraw, (STAKE)), true);
         Books memory before = books();
 
@@ -43,7 +43,7 @@ contract ReentrantDexTest is BehaviourBase {
     }
 
     function test_ConfirmTrigger_IgnoresAWithdrawThatTheDexReenters() public {
-        (uint256 triggerId, IVault.SignedResponse memory p1) = openAndWait();
+        (uint256 triggerId, bytes[] memory p1) = openAndWait();
         reentrant.arm(ReentrantDEX.buy.selector, address(vault), abi.encodeCall(IVault.withdraw, (STAKE)), false);
         Books memory before = books();
         uint256 expectedOut = dex.quoteBuy(address(teth), 50e6, 2070e18);
@@ -64,8 +64,7 @@ contract ReentrantDexTest is BehaviourBase {
     }
 
     function test_RevertWhen_TheDexReentersConfirmTriggerDuringABuy() public {
-        (uint256 first, uint256 second, IVault.SignedResponse memory p1, IVault.SignedResponse memory secondP1) =
-            openTwoAndWait();
+        (uint256 first, uint256 second, bytes[] memory p1, bytes[] memory secondP1) = openTwoAndWait();
         reentrant.arm(
             ReentrantDEX.buy.selector, address(vault), abi.encodeCall(IVault.confirmTrigger, (second, secondP1)), true
         );
@@ -81,8 +80,7 @@ contract ReentrantDexTest is BehaviourBase {
     }
 
     function test_ConfirmTrigger_BuysOnceWhenTheDexReentersASecondConfirm() public {
-        (uint256 first, uint256 second, IVault.SignedResponse memory p1, IVault.SignedResponse memory secondP1) =
-            openTwoAndWait();
+        (uint256 first, uint256 second, bytes[] memory p1, bytes[] memory secondP1) = openTwoAndWait();
         reentrant.arm(
             ReentrantDEX.buy.selector, address(vault), abi.encodeCall(IVault.confirmTrigger, (second, secondP1)), false
         );
@@ -107,9 +105,9 @@ contract ReentrantDexTest is BehaviourBase {
         uint256 positionId = buyEth();
         uint256 triggerId = openEthTrigger("2100");
         vm.warp(block.timestamp + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2180");
+        bytes[] memory p1 = signedPrice("2180");
         // Entry 2070 + 8% = 2235.6
-        IVault.SignedResponse memory takeProfit = signedPrice("2240");
+        bytes[] memory takeProfit = signedPrice("2240");
         reentrant.arm(
             ReentrantDEX.buy.selector,
             address(vault),
@@ -133,7 +131,7 @@ contract ReentrantDexTest is BehaviourBase {
 
     function test_RevertWhen_TheDexReentersWithdrawDuringASell() public {
         uint256 positionId = buyEth();
-        IVault.SignedResponse memory price = signedPrice("2240");
+        bytes[] memory price = signedPrice("2240");
         reentrant.arm(ReentrantDEX.sell.selector, address(vault), abi.encodeCall(IVault.withdraw, (STAKE)), true);
         Books memory before = books();
 
@@ -148,7 +146,7 @@ contract ReentrantDexTest is BehaviourBase {
 
     function test_RevertWhen_TheDexReentersTheSameSellDuringASell() public {
         uint256 positionId = buyEth();
-        IVault.SignedResponse memory price = signedPrice("2240");
+        bytes[] memory price = signedPrice("2240");
         reentrant.arm(
             ReentrantDEX.sell.selector,
             address(vault),
@@ -167,7 +165,7 @@ contract ReentrantDexTest is BehaviourBase {
 
     function test_Sell_PaysOnceWhenTheDexReentersTheSameSell() public {
         uint256 positionId = buyEth();
-        IVault.SignedResponse memory price = signedPrice("2240");
+        bytes[] memory price = signedPrice("2240");
         reentrant.arm(
             ReentrantDEX.sell.selector,
             address(vault),
@@ -191,8 +189,8 @@ contract ReentrantDexTest is BehaviourBase {
         uint256 positionId = buyEth();
         uint256 triggerId = openEthTrigger("2100");
         vm.warp(block.timestamp + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2180");
-        IVault.SignedResponse memory price = signedPrice("2181");
+        bytes[] memory p1 = signedPrice("2180");
+        bytes[] memory price = signedPrice("2181");
         reentrant.arm(
             ReentrantDEX.sell.selector, address(vault), abi.encodeCall(IVault.confirmTrigger, (triggerId, p1)), true
         );
@@ -210,13 +208,14 @@ contract ReentrantDexTest is BehaviourBase {
     /// @dev Two triggers from two posts a minute apart (P0 2000 and 2001), and a P1 for each 31 minutes later
     function openTwoAndWait()
         private
-        returns (uint256 first, uint256 second, IVault.SignedResponse memory p1, IVault.SignedResponse memory secondP1)
+        returns (uint256 first, uint256 second, bytes[] memory p1, bytes[] memory secondP1)
     {
         first = openEthTrigger("2000");
         second = openEthTrigger("2001");
         vm.warp(block.timestamp + 31 minutes);
         p1 = signedPrice("2070");
-        secondP1 = signedPrice("2071");
+        // A second earlier: each price confirms once per user and asset.
+        secondP1 = signedPriceAt("2071", block.timestamp - 1);
     }
 }
 
@@ -239,7 +238,7 @@ contract ReentrantAssetTokenTest is BehaviourBase {
     }
 
     function test_RevertWhen_TheAssetTokenReentersWithdrawWhileItIsMinted() public {
-        (uint256 triggerId, IVault.SignedResponse memory p1) = openAndWait();
+        (uint256 triggerId, bytes[] memory p1) = openAndWait();
         hooked.arm(HookedToken.mint.selector, address(vault), abi.encodeCall(IVault.withdraw, (STAKE)), true);
         Books memory before = books();
 
@@ -256,8 +255,8 @@ contract ReentrantAssetTokenTest is BehaviourBase {
         uint256 first = openEthTrigger("2000");
         uint256 second = openEthTrigger("2001");
         vm.warp(block.timestamp + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
-        IVault.SignedResponse memory secondP1 = signedPrice("2071");
+        bytes[] memory p1 = signedPrice("2070");
+        bytes[] memory secondP1 = signedPrice("2071");
         hooked.arm(
             HookedToken.mint.selector, address(vault), abi.encodeCall(IVault.confirmTrigger, (second, secondP1)), false
         );
@@ -276,7 +275,7 @@ contract ReentrantAssetTokenTest is BehaviourBase {
 
     function test_RevertWhen_TheAssetTokenReentersTheSameSellWhenTheVaultApprovesIt() public {
         uint256 positionId = buyEth();
-        IVault.SignedResponse memory price = signedPrice("2240");
+        bytes[] memory price = signedPrice("2240");
         hooked.arm(
             HookedToken.approve.selector,
             address(vault),
@@ -295,7 +294,7 @@ contract ReentrantAssetTokenTest is BehaviourBase {
 
     function test_Sell_IgnoresAWithdrawThatTheAssetTokenReentersWhileTheDexPullsIt() public {
         uint256 positionId = buyEth();
-        IVault.SignedResponse memory price = signedPrice("2240");
+        bytes[] memory price = signedPrice("2240");
         hooked.arm(HookedToken.transferFrom.selector, address(vault), abi.encodeCall(IVault.withdraw, (STAKE)), false);
         uint256 expectedOut = dex.quoteSell(address(hooked), vault.getPosition(positionId).amount, 2240e18);
 
@@ -368,7 +367,7 @@ contract ReentrantQuoteTokenTest is BehaviourBase {
     }
 
     function test_RevertWhen_TheQuoteTokenReentersWithdrawWhileTheDexPullsIt() public {
-        (uint256 triggerId, IVault.SignedResponse memory p1) = openAndWait();
+        (uint256 triggerId, bytes[] memory p1) = openAndWait();
         quote.arm(HookedToken.transferFrom.selector, address(vault), abi.encodeCall(IVault.withdraw, (STAKE)), true);
         Books memory before = books();
 
@@ -383,7 +382,7 @@ contract ReentrantQuoteTokenTest is BehaviourBase {
 
     function test_RevertWhen_TheQuoteTokenReentersWithdrawWhileTheDexPaysOut() public {
         uint256 positionId = buyEth();
-        IVault.SignedResponse memory price = signedPrice("2240");
+        bytes[] memory price = signedPrice("2240");
         quote.arm(HookedToken.mint.selector, address(vault), abi.encodeCall(IVault.withdraw, (STAKE)), true);
         Books memory before = books();
 
@@ -400,8 +399,8 @@ contract ReentrantQuoteTokenTest is BehaviourBase {
         uint256 positionId = buyEth();
         uint256 triggerId = openEthTrigger("2100");
         vm.warp(block.timestamp + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2180");
-        IVault.SignedResponse memory price = signedPrice("2181");
+        bytes[] memory p1 = signedPrice("2180");
+        bytes[] memory price = signedPrice("2181");
         quote.arm(
             HookedToken.mint.selector, address(vault), abi.encodeCall(IVault.confirmTrigger, (triggerId, p1)), false
         );

@@ -17,6 +17,7 @@
       "takeProfitBps": 800,
       "stagnationBandBps": 100,
       "stagnationAfterSec": 600,
+      "stopLossBps": 500,
       "topics": ["Venezuela", "Iran", "Strait of Hormuz", "OPEC", "sanctions", "pipeline", "drilling"]
     },
     {
@@ -30,6 +31,7 @@
       "takeProfitBps": 800,
       "stagnationBandBps": 100,
       "stagnationAfterSec": 600,
+      "stopLossBps": 500,
       "topics": ["crypto reserve", "SEC", "stablecoin", "Ethereum"]
     },
     {
@@ -43,6 +45,7 @@
       "takeProfitBps": 800,
       "stagnationBandBps": 100,
       "stagnationAfterSec": 600,
+      "stopLossBps": 500,
       "topics": ["Dogecoin", "doge", "meme coin"]
     }
   ]

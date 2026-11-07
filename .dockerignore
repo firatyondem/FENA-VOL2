@@ -1,0 +1,10 @@
+**/node_modules
+**/.env
+**/.env.*
+**/*.key
+agent/.data
+contracts
+frontend
+docs
+.git
+shared/deployments/e2e-*.json

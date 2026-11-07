@@ -1,11 +1,11 @@
-// Shared by the end-to-end test and the local stage driver: anvil's public test accounts, its clock, and posts and
-// prices signed at chain time by the public fixture key, built exactly like the synthetic fixtures.
+// Shared by the end-to-end test and the local stage driver: anvil's public test accounts, its clock, and posts and Pyth
+// prices at chain time. On a plain anvil chain the deploy script installs LocalPyth, which takes unsigned updates.
 import type { Hex, PublicClient, TestClient } from 'viem';
-import { deriveRequestHash, type SignedResponse } from '../src/airnode/attestation.ts';
-import { signResponse } from '../src/airnode/sign.ts';
-import { getAsset, priceRequest, type Profiles } from '../src/profiles.ts';
-import { latestTweetRequest, snowflakeAt } from '../src/sources/twitter.ts';
-import { FIXTURE_AIRNODE_KEY, formatXDate } from './fixture-set.ts';
+import { getAsset, type Profiles } from '../src/profiles.ts';
+import { encodeLocalUpdate, readUpdate } from '../src/pyth/accumulator.ts';
+import type { PriceUpdate } from '../src/pyth/hermes.ts';
+import { usd8 } from '../src/pyth/price-source.ts';
+import { type Post, snowflakeAt } from '../src/sources/posts.ts';
 
 // anvil's first four default accounts: public, test-only keys
 export const ANVIL_KEYS = {
@@ -24,42 +24,41 @@ export const advanceChain = async (testClient: TestClient, publicClient: PublicC
   return chainTime(publicClient);
 };
 
-// The time the next transaction will see. An idle anvil's latest block can be minutes old, and a price signed at that
+// The time the next transaction will see. An idle anvil's latest block can be minutes old, and a price published at that
 // time would already be stale when mined, so this mines a block first.
 export const chainNow = (testClient: TestClient, publicClient: PublicClient) => advanceChain(testClient, publicClient, 0);
 
-export interface FixturePost {
+export interface LocalPost {
   handle: string;
   // Seconds; the Snowflake id encodes it, as a real X id does
   createdAt: number;
-  // Seconds; when the "Airnode" signed the response
-  signedAt: number;
   text: string;
   sequence?: bigint;
-  pinned?: boolean;
-  key?: Hex;
 }
 
-export const signFixturePost = ({ handle, createdAt, signedAt, text, sequence = 1n, pinned = false, key = FIXTURE_AIRNODE_KEY }: FixturePost) =>
-  signResponse(
-    key,
-    deriveRequestHash(latestTweetRequest({ handle, pinned })),
-    signedAt,
-    JSON.stringify({ author: handle, createdAt: formatXDate(createdAt), id: snowflakeAt(createdAt, sequence), text })
-  );
+export const localPost = ({ handle, createdAt, text, sequence = 1n }: LocalPost): Post => ({
+  id: snowflakeAt(createdAt, sequence),
+  author: handle,
+  text,
+  createdAt,
+  isRepost: false,
+});
 
-// A price taken and signed at `at`, in the projection every asset's request uses (updatedAt in milliseconds)
-export const signFixturePrice = (
+// A LocalPyth price of `asset` in USD (such as "2070.5"), published at `at`, the first since `prevPublishTime`
+export const localPriceUpdate = (
   profiles: Profiles,
   asset: string,
   price: string,
   at: number,
-  key: Hex = FIXTURE_AIRNODE_KEY,
-  requestAsset: string = asset
-): Promise<SignedResponse> =>
-  signResponse(
-    key,
-    deriveRequestHash(priceRequest(getAsset(profiles, requestAsset))),
-    at,
-    `{"price":${price},"updatedAt":${at * 1000}}`
-  );
+  prevPublishTime = at - 1
+): PriceUpdate => {
+  const update = encodeLocalUpdate({
+    id: getAsset(profiles, asset).pyth.priceId,
+    price: usd8(price),
+    conf: 0n,
+    expo: -8,
+    publishTime: at,
+    prevPublishTime,
+  });
+  return { updates: [update], prices: readUpdate(update) };
+};

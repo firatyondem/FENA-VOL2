@@ -4,7 +4,7 @@ import type { Address } from 'viem';
 import type { Rule } from '../src/chain/vault.ts';
 import { type AgentMode, type Balances, type CycleFinished, CycleRunner, type HealthPort } from '../src/engine/cycle.ts';
 import { EventLog, type LoggedEvent } from '../src/log.ts';
-import type { WatchedAccount } from '../src/sources/twitter.ts';
+import type { WatchedAccount } from '../src/sources/posts.ts';
 
 const AGENT: Address = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
 const OTHER_AGENT: Address = '0x90F79bf6EB2c4f870365E785982E1f101E93b906';
@@ -49,7 +49,7 @@ const setup = ({ rules = [rule('u1', { demo: ['ETH'] })] as Rule[], health = und
     }
   };
   const state = { rules };
-  const zero: Balances = { ausd: 0n, eth: 0n };
+  const zero: Balances = { eth: 0n };
   const healthPort: HealthPort | undefined = health && {
     check: async () => {
       calls.push('health');
@@ -231,7 +231,7 @@ test('the counters in cycle.finished match the events appended during the cycle'
         log.append({ kind: 'trigger.expired', triggerId: '2', asset: 'BTC' });
       },
       pollAccount: async () => {
-        log.append({ kind: 'payment.settled', transaction: '0xpay' });
+        log.append({ kind: 'cost', costKind: 'post-fetch', source: 'getxapi', usd: 0.001, units: 1, users: ['u1'] });
         log.append({ kind: 'post.seen', account: 'demo', postId: '9', text: 'ETH', createdAt: 0 });
         log.append({ kind: 'post.classified', account: 'demo', postId: '9', classifier: 'stub', results: [] });
         log.append({
@@ -293,24 +293,21 @@ test('saving and halted modes skip Gate 1 but keep Gate 2 and the keeper', async
   }
 });
 
-test('the cycle reports what the balances fell by, and a top-up is not spending', async () => {
-  const spent = setup({
-    health: { before: { ausd: 3_000_000n, eth: 10n ** 16n }, after: { ausd: 2_990_000n, eth: 10n ** 16n - 2n * 10n ** 12n } },
-  });
+test('the cycle reports what the gas balance fell by, and a top-up is not spending', async () => {
+  const spent = setup({ health: { before: { eth: 10n ** 16n }, after: { eth: 10n ** 16n - 2n * 10n ** 12n } } });
   await spent.runner.tick();
-  assert.equal(spent.finished()[0]?.ausdSpent, '0.01');
   assert.equal(spent.finished()[0]?.ethSpent, '0.000002');
 
-  const toppedUp = setup({ health: { before: { ausd: 1_000_000n, eth: 0n }, after: { ausd: 5_000_000n, eth: 0n } } });
+  const toppedUp = setup({ health: { before: { eth: 0n }, after: { eth: 10n ** 16n } } });
   await toppedUp.runner.tick();
-  assert.equal(toppedUp.finished()[0]?.ausdSpent, '0');
+  assert.equal(toppedUp.finished()[0]?.ethSpent, '0');
 });
 
 test('a failing health check keeps the last mode and the cycle still finishes', async () => {
   const { runner, finished, log } = setup({ health: { failing: true } });
   await runner.tick();
   assert.equal(finished()[0]?.mode, 'normal');
-  assert.equal(finished()[0]?.ausdSpent, '0');
+  assert.equal(finished()[0]?.costUsd, '0.000000');
   assert.ok(log.recent().some((event) => event.kind === 'error' && event.where === 'cycle 1 step health'));
 });
 

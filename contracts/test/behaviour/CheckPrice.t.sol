@@ -2,85 +2,67 @@
 pragma solidity ^0.8.24;
 
 import {IVault} from "../../src/interfaces/IVault.sol";
-import {AirnodeV2Attestation} from "../../src/lib/AirnodeV2Attestation.sol";
 import {FixtureBase} from "./FixtureBase.sol";
 
-/// @notice The judges' read-only check: the spec's four tamper tests with no trigger open and no wallet behind the call,
-/// refused for the same reasons as a real buy
+/// @notice checkPrice runs the checks of every P1 and sell price for anyone, records nothing, and moves nothing
 contract CheckPriceTest is FixtureBase {
     function setUp() public override {
         super.setUp();
         vm.warp(CONFIRM_AT);
-        assertEq(vault.triggerCount(), 0, "no trigger is open");
     }
 
-    function test_ReadsTheGenuinePriceAndItsTime() public view {
-        (uint256 price, uint256 priceTime) = vault.checkPrice(ETH, fixture("eth-p1-rise"));
-
-        assertEq(price, 2070e18, "price");
-        assertEq(priceTime, T1, "price time");
+    function test_ReadsThePriceAndItsPublishTime() public {
+        (uint256 price, uint256 publishTime) = vault.checkPrice(ETH, fixture("eth-p1-rise"));
+        assertEq(price, 2070e18);
+        assertEq(publishTime, T1);
     }
 
     function test_AnyoneMayCheck() public {
-        vm.prank(makeAddr("judge"));
+        vm.prank(makeAddr("anyone"));
         (uint256 price,) = vault.checkPrice(ETH, fixture("eth-p1-rise"));
-
-        assertEq(price, 2070e18, "price");
+        assertEq(price, 2070e18);
     }
 
-    function test_MovesNothingAndLeavesTheResponseUnused() public {
-        vm.warp(OPEN_AT);
-        uint256 triggerId = openWith(user, agent, ETH, fixture("tweet-trump-venezuela"), fixture("eth-p0"));
-        vm.warp(CONFIRM_AT);
-        IVault.SignedResponse memory p1 = fixture("eth-p1-rise");
+    function test_MovesNothingAndLeavesThePriceUnused() public {
+        uint256 triggerId = openWith(user, agent, ETH, fixtureTweet("tweet-trump-venezuela"), fixture("eth-p0"));
         Books memory before = books();
 
-        vault.checkPrice(ETH, p1);
-        vault.checkPrice(ETH, p1);
+        vault.checkPrice(ETH, fixture("eth-p1-rise"));
 
         assertBooks(books(), before);
-        assertTriggerStatus(triggerId, IVault.TriggerStatus.Open);
-        vm.prank(keeper);
-        vault.confirmTrigger(triggerId, p1);
-        assertTriggerStatus(triggerId, IVault.TriggerStatus.Confirmed);
+        // The checked price still confirms the trigger.
+        vault.confirmTrigger(triggerId, fixture("eth-p1-rise"));
     }
 
     function test_RevertWhen_AValueIsEdited() public {
-        IVault.SignedResponse memory edited = fixture("tamper-edited-value");
-
-        vm.expectRevert(abi.encodeWithSelector(AirnodeV2Attestation.NotSignedByAirnode.selector, signerOf(edited)));
-        vault.checkPrice(ETH, edited);
+        vm.expectRevert(IVault.InvalidPriceUpdate.selector);
+        vault.checkPrice(ETH, fixture("tamper-edited-value"));
     }
 
-    function test_RevertWhen_TheResponseIsStale() public {
-        vm.expectRevert(abi.encodeWithSelector(IVault.ResponseTooOld.selector, STALE_SIGNED_AT));
+    function test_RevertWhen_ThePriceIsStale() public {
+        vm.expectRevert(abi.encodeWithSelector(IVault.PriceTooOld.selector, STALE_TIME));
         vault.checkPrice(ETH, fixture("tamper-stale"));
     }
 
-    function test_RevertWhen_TheResponseAnswersAnotherRequest() public {
-        vm.expectRevert(abi.encodeWithSelector(IVault.WrongRequestHash.selector, ethRequest, btcRequest));
+    function test_RevertWhen_TheUpdateIsForAnotherAsset() public {
+        vm.expectRevert(abi.encodeWithSelector(IVault.WrongPriceFeed.selector, ETH_FEED));
         vault.checkPrice(ETH, fixture("tamper-different-request"));
     }
 
-    function test_RevertWhen_AnotherKeySigned() public {
-        vm.expectRevert(abi.encodeWithSelector(AirnodeV2Attestation.NotSignedByAirnode.selector, attacker));
+    function test_RevertWhen_SomeoneElseSigned() public {
+        vm.expectRevert(IVault.InvalidPriceUpdate.selector);
         vault.checkPrice(ETH, fixture("tamper-wrong-signer"));
     }
 
     function test_RevertWhen_ThePriceIsOlderThanTheProfileAllows() public {
-        // Signed just now, over a price the source took just past the limit: the market is closed or the feed is stale
-        uint256 updatedAt = block.timestamp - vault.getAssetProfile(ETH).maxPriceAge - 1;
-        IVault.SignedResponse memory stalePrice = fixtureKeyPrice("2070", updatedAt);
-
-        vm.expectRevert(abi.encodeWithSelector(IVault.PriceTooOld.selector, updatedAt));
-        vault.checkPrice(ETH, stalePrice);
+        vm.warp(T1 + 5 minutes + 1);
+        vm.expectRevert(abi.encodeWithSelector(IVault.PriceTooOld.selector, T1));
+        vault.checkPrice(ETH, fixture("eth-p1-rise"));
     }
 
     function test_RevertWhen_TheAssetIsNotRegistered() public {
-        bytes32 unknown = keccak256("UNKNOWN");
-        IVault.SignedResponse memory p1 = fixture("eth-p1-rise");
-
-        vm.expectRevert(abi.encodeWithSelector(IVault.AssetNotRegistered.selector, unknown));
-        vault.checkPrice(unknown, p1);
+        bytes32 doge = keccak256("DOGE");
+        vm.expectRevert(abi.encodeWithSelector(IVault.AssetNotRegistered.selector, doge));
+        vault.checkPrice(doge, fixture("eth-p1-rise"));
     }
 }

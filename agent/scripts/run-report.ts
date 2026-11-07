@@ -2,8 +2,7 @@
 // transaction the agent's wallet sent, mode changes, failing sources and the settings the run ran with.
 // Run with `npm run run-report -- [--since 2h]`. Reads agent/.data/events.jsonl and writes agent/.data/run-report.md.
 import { readFileSync, writeFileSync } from 'node:fs';
-import { formatEther, formatUnits, parseEther, parseUnits } from 'viem';
-import { AUSD_DECIMALS } from '../src/airnode/client.ts';
+import { formatEther, parseEther } from 'viem';
 import type { LoggedEvent } from '../src/log.ts';
 
 const UNITS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
@@ -56,8 +55,9 @@ interface Tally {
   rejected: Record<string, number>;
   expired: number;
   sold: number;
+  // Paid data calls: post fetches and model calls
   payments: number;
-  ausd: bigint;
+  usd: number;
   eth: bigint;
   errors: number;
 }
@@ -72,7 +72,7 @@ const emptyTally = (): Tally => ({
   expired: 0,
   sold: 0,
   payments: 0,
-  ausd: 0n,
+  usd: 0,
   eth: 0n,
   errors: 0,
 });
@@ -82,7 +82,7 @@ const count = (tally: Tally, event: LoggedEvent) => {
     case 'cycle.finished':
       tally.cycles += 1;
       if (event.polled) tally.polls += 1;
-      tally.ausd += parseUnits(event.ausdSpent, AUSD_DECIMALS);
+      tally.usd += Number(event.costUsd);
       tally.eth += parseEther(event.ethSpent);
       break;
     case 'post.seen':
@@ -103,8 +103,8 @@ const count = (tally: Tally, event: LoggedEvent) => {
     case 'position.sold':
       tally.sold += 1;
       break;
-    case 'payment.settled':
-      tally.payments += 1;
+    case 'cost':
+      if (event.costKind === 'post-fetch' || event.costKind === 'ai-call') tally.payments += 1;
       break;
     case 'error':
       tally.errors += 1;
@@ -205,7 +205,7 @@ const duration = (ms: number) => {
   const minutes = Math.round(ms / 60_000);
   return minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
 };
-const ausd = (value: bigint) => formatUnits(value, AUSD_DECIMALS);
+const usd = (value: number) => `$${value.toFixed(4)}`;
 const rejections = (rejected: Record<string, number>) =>
   Object.entries(rejected)
     .map(([reason, times]) => `${reason} ×${times}`)
@@ -215,7 +215,7 @@ const sum = (rejected: Record<string, number>) => Object.values(rejected).reduce
 export const renderSummary = (report: RunReport): string => {
   if (report.from === undefined || report.to === undefined) return 'No live run in the log for this window.';
   const { totals } = report;
-  const spent = `spent ${ausd(totals.ausd)} aUSD and ${formatEther(totals.eth)} ETH`;
+  const spent = `spent ${usd(totals.usd)} and ${formatEther(totals.eth)} ETH`;
   return [
     `Run ${time(report.from)} → ${time(report.to)}: up ${duration(report.uptimeMs)}, ${report.restarts} restart(s)`,
     `${report.cyclesRun} cycles (${report.cyclesSkipped} skipped), ${totals.polls} polls, ${totals.posts} new posts`,
@@ -236,7 +236,7 @@ export const renderMarkdown = (report: RunReport): string => {
     `- Uptime: ${duration(report.uptimeMs)}, restarts: ${report.restarts}`,
     `- Cycles run: ${report.cyclesRun}, skipped: ${report.cyclesSkipped}`,
     `- Agent transactions: ${report.transactions.length}, data payments: ${report.totals.payments}`,
-    `- Spent: ${ausd(report.totals.ausd)} aUSD on data, ${formatEther(report.totals.eth)} ETH on gas`,
+    `- Spent: ${usd(report.totals.usd)} on data and fees, ${formatEther(report.totals.eth)} ETH on gas`,
     `- Errors logged: ${report.totals.errors}`
   );
   for (const restore of report.recovered) {
@@ -245,11 +245,11 @@ export const renderMarkdown = (report: RunReport): string => {
   }
 
   lines.push('', '## Per hour', '');
-  lines.push('| Hour (UTC) | Cycles | Polls | Posts | Opened | Bought | Rejected | Expired | Sold | aUSD | ETH | Errors |');
+  lines.push('| Hour (UTC) | Cycles | Polls | Posts | Opened | Bought | Rejected | Expired | Sold | USD | ETH | Errors |');
   lines.push('| --- | --: | --: | --: | --: | --: | --- | --: | --: | --: | --: | --: |');
   for (const hour of report.hours) {
     const cells = [hour.hour, hour.cycles, hour.polls, hour.posts, hour.triggers, hour.bought, rejections(hour.rejected)];
-    cells.push(hour.expired, hour.sold, ausd(hour.ausd), formatEther(hour.eth), hour.errors);
+    cells.push(hour.expired, hour.sold, usd(hour.usd), formatEther(hour.eth), hour.errors);
     lines.push(`| ${cells.join(' | ')} |`);
   }
 

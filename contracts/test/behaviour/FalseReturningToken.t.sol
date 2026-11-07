@@ -57,7 +57,7 @@ contract FalseReturningQuoteTokenTest is BehaviourBase {
     }
 
     function test_RevertWhen_TheQuoteTokenAnswersFalseOnTheApprovalOfABuy() public {
-        (uint256 triggerId, IVault.SignedResponse memory p1) = openAndWait();
+        (uint256 triggerId, bytes[] memory p1) = openAndWait();
         quote.setFailures(false, false, true);
         Books memory before = books();
 
@@ -77,7 +77,7 @@ contract FalseReturningQuoteTokenTest is BehaviourBase {
     }
 
     function test_RevertWhen_TheQuoteTokenAnswersFalseWhenTheDexPullsIt() public {
-        (uint256 triggerId, IVault.SignedResponse memory p1) = openAndWait();
+        (uint256 triggerId, bytes[] memory p1) = openAndWait();
         quote.setFailures(false, true, false);
         Books memory before = books();
 
@@ -113,7 +113,7 @@ contract FalseReturningAssetTokenTest is BehaviourBase {
         assertEq(asset.balanceOf(address(vault)), amount, "the vault holds what it bought");
         asset.setFailures(false, false, true);
         vm.warp(block.timestamp + 10 minutes);
-        IVault.SignedResponse memory price = signedPrice("2100");
+        bytes[] memory price = signedPrice("2100");
         Books memory before = books();
 
         vm.prank(user);
@@ -138,7 +138,7 @@ contract FalseReturningAssetTokenTest is BehaviourBase {
         uint256 amount = vault.getPosition(positionId).amount;
         asset.setFailures(false, true, false);
         vm.warp(block.timestamp + 10 minutes);
-        IVault.SignedResponse memory price = signedPrice("2100");
+        bytes[] memory price = signedPrice("2100");
         Books memory before = books();
 
         vm.prank(user);

@@ -30,7 +30,7 @@ contract LimitsFuzzTest is FuzzBase {
         uint256 budget = dailyLimit * shareBps / BPS;
         (uint256 triggerId, uint256 t0) = openEthAt(2000e18);
         vm.warp(t0 + 1);
-        IVault.SignedResponse memory p1 = signedEthPrice(2070e18, block.timestamp);
+        bytes[] memory p1 = signedEthPrice(2070e18, block.timestamp);
 
         if (amount > budget) {
             vm.expectRevert(abi.encodeWithSelector(IVault.DailyBudgetExceeded.selector, amount, budget));
@@ -72,7 +72,7 @@ contract LimitsFuzzTest is FuzzBase {
 
         // Second buy, later on the same UTC day
         vm.warp(block.timestamp + gap);
-        (uint256 secondTrigger, IVault.SignedResponse memory secondP1) = readyEthBuy();
+        (uint256 secondTrigger, bytes[] memory secondP1) = readyEthBuy();
         assertEq(block.timestamp / 1 days, day, "still the same UTC day");
         if (2 * amount > budget) {
             vm.expectRevert(abi.encodeWithSelector(IVault.DailyBudgetExceeded.selector, amount, budget - amount));
@@ -100,7 +100,7 @@ contract LimitsFuzzTest is FuzzBase {
     }
 
     /// @dev Opens a trigger at P0 = 2000 and returns it with a P1 of +3.5%, taken and signed one second after P0
-    function readyEthBuy() internal returns (uint256 triggerId, IVault.SignedResponse memory p1) {
+    function readyEthBuy() internal returns (uint256 triggerId, bytes[] memory p1) {
         uint256 t0;
         (triggerId, t0) = openEthAt(2000e18);
         vm.warp(t0 + 1);
@@ -109,7 +109,7 @@ contract LimitsFuzzTest is FuzzBase {
 
     /// @dev Opens a trigger and confirms it, expecting the buy to go through
     function confirmEthBuy() internal {
-        (uint256 triggerId, IVault.SignedResponse memory p1) = readyEthBuy();
+        (uint256 triggerId, bytes[] memory p1) = readyEthBuy();
         vm.prank(keeper);
         vault.confirmTrigger(triggerId, p1);
     }
@@ -138,7 +138,7 @@ contract LimitsFuzzTest is FuzzBase {
             sinceBuy = bound(offset, 61, cooldown + 1 hours);
         }
         vm.warp(lastBuyAt + sinceBuy);
-        IVault.SignedResponse memory p1 = signedEthPrice(2070e18, block.timestamp);
+        bytes[] memory p1 = signedEthPrice(2070e18, block.timestamp);
 
         if (sinceBuy < cooldown) {
             vm.expectRevert(abi.encodeWithSelector(IVault.CooldownActive.selector, lastBuyAt + cooldown));

@@ -23,12 +23,12 @@ contract BuyAndSellFlowTest is FixtureFlowBase {
 
         // Gate 1: the agent opens the trigger one second after the source took P0
         vm.warp(P0_SIGNED_AT);
-        IVault.SignedResponse memory tweet = fixture("tweet-trump-venezuela");
-        IVault.SignedResponse memory p0 = fixture("oil-p0");
+        Post memory tweet = fixtureTweet("tweet-trump-venezuela");
+        bytes[] memory p0 = fixture("oil-p0");
         vm.expectEmit(address(vault));
         emit IVault.TriggerOpened(1, alice, OIL, TRUMP_TWEET_ID, 70.25e18, T0);
         vm.prank(aliceAgent);
-        uint256 triggerId = vault.openTrigger(alice, OIL, tweet, p0);
+        uint256 triggerId = openTriggerWith(alice, OIL, tweet, p0);
         IVault.Trigger memory trigger = vault.getTrigger(triggerId);
         assertEq(trigger.account, trumpAccount);
         assertEq(trigger.tweetId, TRUMP_TWEET_ID);
@@ -40,7 +40,7 @@ contract BuyAndSellFlowTest is FixtureFlowBase {
 
         // Gate 2: past the minimum wait, anyone confirms with P1, and the vault buys at exactly P1
         vm.warp(P1_SIGNED_AT);
-        IVault.SignedResponse memory p1 = fixture("oil-p1-rise");
+        bytes[] memory p1 = fixture("oil-p1-rise");
         uint256 expectedOut = assetOutAt(BUY, 71.4e18);
         assertEq(expectedOut, dex.quoteBuy(address(toil), BUY, 71.4e18));
         vm.expectEmit(address(dex));
@@ -70,7 +70,7 @@ contract BuyAndSellFlowTest is FixtureFlowBase {
         vm.warp(P1_SIGNED_AT + 1 hours);
         uint256 target = 71.4e18 * (BPS + 800) / BPS;
         assertEq(target, 77.112e18);
-        IVault.SignedResponse memory price = fixtureSignedPrice(oilRequest, "77.112");
+        bytes[] memory price = fixtureSignedPrice(OIL_FEED, "77.112");
         uint256 expectedQuote = quoteOutAt(expectedOut, target);
         vm.expectEmit(address(vault));
         emit IVault.PositionSold(positionId, alice, IVault.SellReason.TakeProfit, target, expectedQuote);
@@ -117,7 +117,7 @@ contract BuyAndSellFlowTest is FixtureFlowBase {
 
         // A P1 one minute after P0 is before the 2-minute wait; the trigger stays open.
         vm.warp(P1_EARLY_SIGNED_AT);
-        IVault.SignedResponse memory early = fixture("eth-p1-early");
+        bytes[] memory early = fixture("eth-p1-early");
         vm.expectRevert(abi.encodeWithSelector(IVault.WaitNotOver.selector, T0 + 2 minutes));
         vm.prank(keeper);
         vault.confirmTrigger(triggerId, early);
@@ -129,14 +129,14 @@ contract BuyAndSellFlowTest is FixtureFlowBase {
 
         // One second before the 10-minute stagnation delay, the exit is refused.
         vm.warp(openedAt + 10 minutes - 1);
-        IVault.SignedResponse memory tooSoon = fixtureSignedPrice(ethRequest, "2060");
+        bytes[] memory tooSoon = fixtureSignedPrice(ETH_FEED, "2060");
         vm.expectRevert(abi.encodeWithSelector(IVault.StagnationDelayNotOver.selector, openedAt + 10 minutes));
         vm.prank(stranger);
         vault.sell(positionId, IVault.SellReason.Stagnation, tooSoon);
 
         // After the delay, anyone sells at 2060, within 2070 +- 1%.
         vm.warp(openedAt + 10 minutes);
-        IVault.SignedResponse memory price = fixtureSignedPrice(ethRequest, "2060");
+        bytes[] memory price = fixtureSignedPrice(ETH_FEED, "2060");
         uint256 expectedQuote = quoteOutAt(amount, 2060e18);
         vm.expectEmit(address(vault));
         emit IVault.PositionSold(positionId, alice, IVault.SellReason.Stagnation, 2060e18, expectedQuote);
@@ -161,11 +161,11 @@ contract BuyAndSellFlowTest is FixtureFlowBase {
 
         // +0.5% is below the 3% threshold and +15% above the 12% spike cap; neither buys and the trigger stays open.
         vm.warp(P1_SIGNED_AT);
-        IVault.SignedResponse memory flat = fixture("eth-p1-flat");
+        bytes[] memory flat = fixture("eth-p1-flat");
         vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 2000e18, 2010e18));
         vm.prank(keeper);
         vault.confirmTrigger(triggerId, flat);
-        IVault.SignedResponse memory spike = fixture("eth-p1-spike");
+        bytes[] memory spike = fixture("eth-p1-spike");
         vm.expectRevert(abi.encodeWithSelector(IVault.SpikeTooHigh.selector, 2000e18, 2300e18));
         vm.prank(keeper);
         vault.confirmTrigger(triggerId, spike);
@@ -175,7 +175,7 @@ contract BuyAndSellFlowTest is FixtureFlowBase {
 
         // Ten minutes later the price has dropped; only Alice may sell by hand.
         vm.warp(block.timestamp + 10 minutes);
-        IVault.SignedResponse memory price = fixtureSignedPrice(ethRequest, "1950");
+        bytes[] memory price = fixtureSignedPrice(ETH_FEED, "1950");
         vm.expectRevert(abi.encodeWithSelector(IVault.NotPositionOwner.selector, stranger));
         vm.prank(stranger);
         vault.sell(positionId, IVault.SellReason.Manual, price);
@@ -206,7 +206,7 @@ contract BuyAndSellFlowTest is FixtureFlowBase {
     /// @dev Confirms an ETH trigger with eth-p1-rise and checks the buy at exactly 2070
     function confirmEthRise(uint256 triggerId) private returns (uint256 positionId) {
         vm.warp(P1_SIGNED_AT);
-        IVault.SignedResponse memory p1 = fixture("eth-p1-rise");
+        bytes[] memory p1 = fixture("eth-p1-rise");
         uint256 expectedOut = assetOutAt(BUY, 2070e18);
         vm.expectEmit(address(dex));
         emit MockDEX.Bought(address(vault), address(teth), BUY, expectedOut, 2070e18);

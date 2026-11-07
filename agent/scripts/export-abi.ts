@@ -3,7 +3,7 @@
 // Run `forge build` in contracts/ first, then `npm run export-abi`.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
-const CONTRACTS = ['Vault', 'MockDEX', 'MockUSDC', 'MockAssetToken'] as const;
+const CONTRACTS = ['Vault', 'MockDEX', 'MockUSDC', 'MockAssetToken', 'LocalPyth'] as const;
 
 export const readAbi = (name: string): unknown[] =>
   (JSON.parse(readFileSync(new URL(`../../contracts/out/${name}.sol/${name}.json`, import.meta.url), 'utf8')) as { abi: unknown[] })

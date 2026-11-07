@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {IVault} from "../src/interfaces/IVault.sol";
 import {VaultTestBase} from "./utils/VaultTestBase.sol";
 
-/// @notice Gate 1: the agent opens a trigger with a signed post and a signed P0
+/// @notice Gate 1: the agent opens a trigger for a post with a Pyth P0, the first price at or after the post
 contract GateOneTest is VaultTestBase {
     function test_OpenTrigger_RecordsThePostAndP0() public {
         uint256 postedAt = block.timestamp;
@@ -22,12 +22,12 @@ contract GateOneTest is VaultTestBase {
 
     function test_RevertWhen_TheCallerIsNotTheAgent() public {
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory tweet = signedTweet(block.timestamp - 1 minutes);
-        IVault.SignedResponse memory p0 = signedPrice("2000");
+        Post memory tweet = signedTweet(block.timestamp - 1 minutes);
+        bytes[] memory p0 = signedPrice("2000");
 
         vm.prank(keeper);
         vm.expectRevert(abi.encodeWithSelector(IVault.NotAgent.selector, keeper));
-        vault.openTrigger(user, ETH, tweet, p0);
+        openTriggerWith(user, ETH, tweet, p0);
     }
 
     function test_RevertWhen_TheRuleIsPaused() public {
@@ -40,87 +40,246 @@ contract GateOneTest is VaultTestBase {
 
     function test_RevertWhen_TheAssetIsNotInTheRule() public {
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory tweet = signedTweet(block.timestamp - 1 minutes);
-        IVault.SignedResponse memory p0 = signedPrice("2000");
+        Post memory tweet = signedTweet(block.timestamp - 1 minutes);
+        bytes[] memory p0 = signedPrice("2000");
 
         vm.prank(agent);
         vm.expectRevert(abi.encodeWithSelector(IVault.AssetNotAllowed.selector, user, OIL));
-        vault.openTrigger(user, OIL, tweet, p0);
+        openTriggerWith(user, OIL, tweet, p0);
     }
 
     function test_RevertWhen_TheAccountIsNotWatched() public {
-        bytes32 otherAccount = keccak256("userLastTweets someoneElse");
-        vault.setWatchableAccount(otherAccount, tweetAirnode);
+        bytes32 otherAccount = keccak256("someoneelse");
+        vault.setWatchableAccount(otherAccount, true);
         vm.warp(block.timestamp + 1 minutes);
-        uint256 tweetId = tweetIdAt(block.timestamp - 1 minutes);
-        IVault.SignedResponse memory tweet = sign(
-            tweetAirnodeKey, otherAccount, block.timestamp, bytes(string.concat('{"id":"', vm.toString(tweetId), '"}'))
-        );
-        IVault.SignedResponse memory p0 = signedPrice("2000");
+        Post memory tweet = postOf(otherAccount, tweetIdAt(block.timestamp - 1 minutes));
+        bytes[] memory p0 = signedPrice("2000");
 
         vm.prank(agent);
         vm.expectRevert(abi.encodeWithSelector(IVault.AccountNotWatched.selector, user, otherAccount));
-        vault.openTrigger(user, ETH, tweet, p0);
+        openTriggerWith(user, ETH, tweet, p0);
+    }
+
+    function test_RevertWhen_TheAdminRemovedTheAccount() public {
+        vault.setWatchableAccount(ACCOUNT, false);
+        vm.warp(block.timestamp + 1 minutes);
+        Post memory tweet = signedTweet(block.timestamp - 1 minutes);
+        bytes[] memory p0 = signedPrice("2000");
+
+        vm.prank(agent);
+        vm.expectRevert(abi.encodeWithSelector(IVault.AccountNotRegistered.selector, ACCOUNT));
+        openTriggerWith(user, ETH, tweet, p0);
     }
 
     function test_RevertWhen_ThePostOpensASecondTriggerForTheSameAsset() public {
         uint256 postedAt = block.timestamp;
         openEthTrigger("2000");
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory tweet = signedTweet(postedAt);
-        IVault.SignedResponse memory p0 = signedPrice("2001");
+        Post memory tweet = signedTweet(postedAt);
+        bytes[] memory p0 = signedPrice("2001");
 
         vm.prank(agent);
         vm.expectRevert(abi.encodeWithSelector(IVault.TweetAlreadyUsed.selector, user, ETH, tweetIdAt(postedAt)));
-        vault.openTrigger(user, ETH, tweet, p0);
+        openTriggerWith(user, ETH, tweet, p0);
     }
 
-    function test_RevertWhen_AnOldPostComesWithANewPrice() public {
+    // ---------------------------------------------------------------------------------------------------------------
+    // The post's time: posts are not signed, so the vault bounds how old a post the agent may name
+    // ---------------------------------------------------------------------------------------------------------------
+
+    function test_OpenTrigger_AcceptsAPostExactlyMaxPostAgeOld() public {
         uint256 postedAt = block.timestamp;
-        vm.warp(postedAt + vault.MAX_POST_TO_P0() + 1);
-        IVault.SignedResponse memory tweet = signedTweet(postedAt);
-        IVault.SignedResponse memory p0 = signedPrice("2000");
+        vm.warp(postedAt + vault.MAX_POST_AGE());
+        Post memory tweet = signedTweet(postedAt);
+        bytes[] memory p0 = signedPriceAt("2000", postedAt + 1 minutes);
+        vm.prank(agent);
+        openTriggerWith(user, ETH, tweet, p0);
+    }
+
+    function test_RevertWhen_ThePostIsOlderThanMaxPostAge() public {
+        uint256 postedAt = block.timestamp;
+        vm.warp(postedAt + vault.MAX_POST_AGE() + 1);
+        Post memory tweet = signedTweet(postedAt);
+        bytes[] memory p0 = signedPriceAt("2000", postedAt + 1 minutes);
 
         vm.prank(agent);
-        vm.expectRevert(abi.encodeWithSelector(IVault.PriceOutsideTweetWindow.selector, postedAt, block.timestamp));
-        vault.openTrigger(user, ETH, tweet, p0);
+        vm.expectRevert(abi.encodeWithSelector(IVault.PostOutsideWindow.selector, postedAt));
+        openTriggerWith(user, ETH, tweet, p0);
     }
 
-    function test_RevertWhen_P0WasTakenBeforeThePost() public {
+    function test_RevertWhen_ThePostIsFromTheFuture() public {
+        uint256 postedAt = block.timestamp + 1;
+        Post memory tweet = signedTweet(postedAt);
+        bytes[] memory p0 = signedPriceAt("2000", postedAt);
+
+        vm.prank(agent);
+        vm.expectRevert(abi.encodeWithSelector(IVault.PostOutsideWindow.selector, postedAt));
+        openTriggerWith(user, ETH, tweet, p0);
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // P0: the first Pyth price at or after the post, at most MAX_POST_TO_P0 after it
+    // ---------------------------------------------------------------------------------------------------------------
+
+    function test_OpenTrigger_AcceptsTheFirstPriceAfterThePost() public {
+        uint256 postedAt = block.timestamp;
+        vm.warp(postedAt + 5 minutes);
+        // Pyth's previous price for the feed came a second before the post.
+        bytes[] memory p0 = priceUpdate18(ETH_FEED, 2000e18, postedAt + 2, uint64(postedAt - 1));
+        Post memory tweet = signedTweet(postedAt);
+        vm.prank(agent);
+        uint256 triggerId = openTriggerWith(user, ETH, tweet, p0);
+        assertEq(vault.getTrigger(triggerId).t0, postedAt + 2);
+    }
+
+    function test_OpenTrigger_AcceptsAPricePublishedInTheSecondOfThePost() public {
+        uint256 postedAt = block.timestamp;
+        vm.warp(postedAt + 1 minutes);
+        bytes[] memory p0 = priceUpdate18(ETH_FEED, 2000e18, postedAt, uint64(postedAt - 1));
+        Post memory tweet = signedTweet(postedAt);
+        vm.prank(agent);
+        uint256 triggerId = openTriggerWith(user, ETH, tweet, p0);
+        assertEq(vault.getTrigger(triggerId).t0, postedAt);
+    }
+
+    function test_RevertWhen_P0IsNotTheFirstPriceAfterThePost() public {
+        // Pyth published another price after the post and before this one, so the agent could have picked the better
+        // of the two.
+        uint256 postedAt = block.timestamp;
+        vm.warp(postedAt + 5 minutes);
+        bytes[] memory p0 = priceUpdate18(ETH_FEED, 1990e18, postedAt + 3 minutes, uint64(postedAt + 2 minutes));
+        Post memory tweet = signedTweet(postedAt);
+
+        vm.prank(agent);
+        vm.expectRevert(abi.encodeWithSelector(IVault.PriceNotFirstAfterPost.selector, postedAt, postedAt + 3 minutes));
+        openTriggerWith(user, ETH, tweet, p0);
+    }
+
+    function test_RevertWhen_P0WasPublishedTooLongAfterThePost() public {
+        uint256 postedAt = block.timestamp;
+        uint256 late = postedAt + vault.MAX_POST_TO_P0() + 1;
+        vm.warp(late);
+        Post memory tweet = signedTweet(postedAt);
+        bytes[] memory p0 = signedPriceAt("2000", late);
+
+        vm.prank(agent);
+        vm.expectRevert(abi.encodeWithSelector(IVault.PriceOutsideTweetWindow.selector, postedAt, late));
+        openTriggerWith(user, ETH, tweet, p0);
+    }
+
+    function test_OpenTrigger_AcceptsP0ExactlyMaxPostToP0AfterThePost() public {
+        uint256 postedAt = block.timestamp;
+        uint256 latest = postedAt + vault.MAX_POST_TO_P0();
+        vm.warp(latest);
+        Post memory tweet = signedTweet(postedAt);
+        bytes[] memory p0 = signedPriceAt("2000", latest);
+        vm.prank(agent);
+        uint256 triggerId = openTriggerWith(user, ETH, tweet, p0);
+        assertEq(vault.getTrigger(triggerId).t0, latest);
+    }
+
+    function test_RevertWhen_P0WasPublishedBeforeThePost() public {
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory tweet = signedTweet(block.timestamp);
-        IVault.SignedResponse memory p0 = signedPriceAt("2000", block.timestamp - 1);
+        Post memory tweet = signedTweet(block.timestamp);
+        bytes[] memory p0 = signedPriceAt("2000", block.timestamp - 1);
 
         vm.prank(agent);
         vm.expectRevert(
             abi.encodeWithSelector(IVault.PriceOutsideTweetWindow.selector, block.timestamp, block.timestamp - 1)
         );
-        vault.openTrigger(user, ETH, tweet, p0);
+        openTriggerWith(user, ETH, tweet, p0);
     }
 
-    function test_RevertWhen_TheMarketIsClosed() public {
-        // A fresh signature over a price that the source took 6 minutes ago, as for a stock after the close
-        vm.warp(block.timestamp + 7 minutes);
-        IVault.SignedResponse memory tweet = signedTweet(block.timestamp - 7 minutes);
-        IVault.SignedResponse memory p0 = signedPriceAt("2000", block.timestamp - 6 minutes);
+    function test_RevertWhen_TheMarketWasClosedAfterThePost() public {
+        // A stock's post after the close: Pyth published no price in the ten minutes after it, and the next one comes
+        // at the open.
+        uint256 postedAt = block.timestamp;
+        vm.warp(postedAt + 20 minutes);
+        Post memory tweet = signedTweet(postedAt);
+        bytes[] memory lastClose = signedPriceAt("2000", postedAt - 6 minutes);
 
         vm.prank(agent);
-        vm.expectRevert(abi.encodeWithSelector(IVault.PriceTooOld.selector, block.timestamp - 6 minutes));
-        vault.openTrigger(user, ETH, tweet, p0);
+        vm.expectRevert(abi.encodeWithSelector(IVault.PriceOutsideTweetWindow.selector, postedAt, postedAt - 6 minutes));
+        openTriggerWith(user, ETH, tweet, lastClose);
+    }
+
+    function test_RevertWhen_P0IsForAnotherAsset() public {
+        vm.warp(block.timestamp + 1 minutes);
+        Post memory tweet = signedTweet(block.timestamp - 1 minutes);
+        bytes[] memory p0 = signedPriceOf(BTC_FEED, "80000", block.timestamp);
+
+        vm.prank(agent);
+        vm.expectRevert(abi.encodeWithSelector(IVault.WrongPriceFeed.selector, ETH_FEED));
+        openTriggerWith(user, ETH, tweet, p0);
+    }
+
+    function test_RevertWhen_P0IsEdited() public {
+        vm.warp(block.timestamp + 1 minutes);
+        Post memory tweet = signedTweet(block.timestamp - 1 minutes);
+        bytes[] memory p0 = edited(signedPrice("1500"));
+
+        vm.prank(agent);
+        vm.expectRevert(IVault.InvalidPriceUpdate.selector);
+        openTriggerWith(user, ETH, tweet, p0);
     }
 
     function test_RevertWhen_P0IsUsedTwice() public {
+        // Two posts in the same minute share the first price after them, but a P0 opens one trigger per user and asset.
         uint256 firstPostAt = block.timestamp;
         vm.warp(firstPostAt + 1 minutes);
-        IVault.SignedResponse memory p0 = signedPrice("2000");
+        bytes[] memory p0 = signedPrice("2000");
+        Post memory firstTweet = signedTweet(firstPostAt);
         vm.prank(agent);
-        vault.openTrigger(user, ETH, signedTweet(firstPostAt), p0);
+        openTriggerWith(user, ETH, firstTweet, p0);
 
-        IVault.SignedResponse memory secondTweet = signedTweet(firstPostAt + 30);
-        bytes32 responseHash = keccak256(abi.encode(p0.requestHash, p0.timestamp, p0.data));
+        Post memory secondTweet = signedTweet(firstPostAt + 30);
         vm.prank(agent);
-        vm.expectRevert(abi.encodeWithSelector(IVault.ResponseAlreadyUsed.selector, responseHash));
-        vault.openTrigger(user, ETH, secondTweet, p0);
+        vm.expectRevert(abi.encodeWithSelector(IVault.PriceAlreadyUsed.selector, ETH, block.timestamp));
+        openTriggerWith(user, ETH, secondTweet, p0);
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // Pyth's fee
+    // ---------------------------------------------------------------------------------------------------------------
+
+    function test_OpenTrigger_PaysPythsFeeAndRefundsTheRest() public {
+        pyth.setFee(10);
+        vm.deal(agent, 1 ether);
+        uint256 postedAt = block.timestamp;
+        vm.warp(postedAt + 1 minutes);
+        bytes[] memory p0 = signedPrice("2000");
+        assertEq(vault.updateFee(p0), 10);
+
+        vm.prank(agent);
+        vault.openTrigger{value: 1000}(user, ETH, ACCOUNT, tweetIdAt(postedAt), p0);
+        assertEq(address(pyth).balance, 10, "Pyth's fee");
+        assertEq(agent.balance, 1 ether - 10, "the rest comes back");
+        assertEq(address(vault).balance, 0, "the vault keeps nothing");
+    }
+
+    function test_RevertWhen_TheFeeIsTooLow() public {
+        pyth.setFee(10);
+        vm.deal(agent, 1 ether);
+        uint256 postedAt = block.timestamp;
+        vm.warp(postedAt + 1 minutes);
+        bytes[] memory p0 = signedPrice("2000");
+
+        vm.prank(agent);
+        vm.expectRevert(abi.encodeWithSelector(IVault.InsufficientFee.selector, 9, 10));
+        vault.openTrigger{value: 9}(user, ETH, ACCOUNT, tweetIdAt(postedAt), p0);
+    }
+
+    function test_ARefusedP0CostsOnlyOneFee() public {
+        // The vault parses a refused P0 a second time to name the reason, paid with the fee of the first call.
+        pyth.setFee(10);
+        vm.deal(agent, 1 ether);
+        uint256 postedAt = block.timestamp;
+        vm.warp(postedAt + 5 minutes);
+        bytes[] memory p0 = priceUpdate18(ETH_FEED, 2000e18, postedAt + 3 minutes, uint64(postedAt + 2 minutes));
+
+        vm.prank(agent);
+        vm.expectRevert(abi.encodeWithSelector(IVault.PriceNotFirstAfterPost.selector, postedAt, postedAt + 3 minutes));
+        vault.openTrigger{value: 10}(user, ETH, ACCOUNT, tweetIdAt(postedAt), p0);
     }
 
     function openEthTriggerExternally() external returns (uint256) {
@@ -128,7 +287,7 @@ contract GateOneTest is VaultTestBase {
     }
 }
 
-/// @notice Gate 2: anyone confirms a trigger with a signed P1, and the vault buys only if every check passes
+/// @notice Gate 2: anyone confirms a trigger with a Pyth P1, and the vault buys only if every check passes
 contract GateTwoTest is VaultTestBase {
     uint256 triggerId;
     uint256 t0;
@@ -141,7 +300,7 @@ contract GateTwoTest is VaultTestBase {
 
     function test_RevertWhen_TheMinimumWaitIsNotOver() public {
         vm.warp(t0 + 29 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.WaitNotOver.selector, t0 + 30 minutes));
         vault.confirmTrigger(triggerId, p1);
@@ -149,7 +308,7 @@ contract GateTwoTest is VaultTestBase {
 
     function test_RevertWhen_P1IsOutsideTheWindow() public {
         vm.warp(t0 + 4 hours + 1);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.WindowClosed.selector, t0 + 4 hours));
         vault.confirmTrigger(triggerId, p1);
@@ -157,7 +316,7 @@ contract GateTwoTest is VaultTestBase {
 
     function test_RevertWhen_TheTrendIsTooWeak() public {
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2059.99");
+        bytes[] memory p1 = signedPrice("2059.99");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 2000e18, 2059.99e18));
         vault.confirmTrigger(triggerId, p1);
@@ -171,7 +330,7 @@ contract GateTwoTest is VaultTestBase {
 
     function test_RevertWhen_ThePriceSpikesAboveTheCap() public {
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2240.01");
+        bytes[] memory p1 = signedPrice("2240.01");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.SpikeTooHigh.selector, 2000e18, 2240.01e18));
         vault.confirmTrigger(triggerId, p1);
@@ -179,7 +338,7 @@ contract GateTwoTest is VaultTestBase {
 
     function test_AWeakP1KeepsTheTriggerOpenForALaterOne() public {
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory weak = signedPrice("2010");
+        bytes[] memory weak = signedPrice("2010");
         vm.expectPartialRevert(IVault.TrendTooWeak.selector);
         vault.confirmTrigger(triggerId, weak);
 
@@ -192,7 +351,7 @@ contract GateTwoTest is VaultTestBase {
         vm.warp(t0 + 31 minutes);
         vault.confirmTrigger(triggerId, signedPrice("2070"));
         vm.warp(block.timestamp + 1);
-        IVault.SignedResponse memory again = signedPrice("2071");
+        bytes[] memory again = signedPrice("2071");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.TriggerNotOpen.selector, triggerId));
         vault.confirmTrigger(triggerId, again);
@@ -214,7 +373,7 @@ contract GateTwoTest is VaultTestBase {
         vm.prank(user);
         vault.setPaused(true);
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.RuleIsPaused.selector, user));
         vault.confirmTrigger(triggerId, p1);
@@ -227,7 +386,7 @@ contract GateTwoTest is VaultTestBase {
 
         uint256 secondTriggerId = openEthTrigger("2070");
         vm.warp(block.timestamp + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2140");
+        bytes[] memory p1 = signedPrice("2140");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.CooldownActive.selector, boughtAt + 24 hours));
         vault.confirmTrigger(secondTriggerId, p1);
@@ -247,7 +406,7 @@ contract GateTwoTest is VaultTestBase {
 
         uint256 secondTriggerId = openEthTrigger("2070");
         vm.warp(block.timestamp + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2140");
+        bytes[] memory p1 = signedPrice("2140");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.DailyBudgetExceeded.selector, 50e6, 10e6));
         vault.confirmTrigger(secondTriggerId, p1);
@@ -257,7 +416,7 @@ contract GateTwoTest is VaultTestBase {
         vm.prank(user);
         vault.withdraw(960e6);
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.InsufficientBalance.selector, 40e6, 50e6));
         vault.confirmTrigger(triggerId, p1);
@@ -267,7 +426,7 @@ contract GateTwoTest is VaultTestBase {
         vm.prank(user);
         vault.setRule(rule(), new bytes32[](0), new IVault.AssetRule[](0), new string[](0), watched());
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.AssetNotAllowed.selector, user, ETH));
         vault.confirmTrigger(triggerId, p1);

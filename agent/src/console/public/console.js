@@ -34,7 +34,7 @@ const renderFacts = (meta) => {
     row.append(el('dt', '', term), el('dd', '', value));
     facts.append(row);
   }
-  $('edition').textContent = meta.mode === 'replay' ? 'Replay edition · signed fixtures' : 'Live edition · Base Sepolia';
+  $('edition').textContent = meta.mode === 'replay' ? 'Replay edition · scripted prices' : 'Live edition · Base Sepolia';
 };
 
 const renderTally = (counts) => {

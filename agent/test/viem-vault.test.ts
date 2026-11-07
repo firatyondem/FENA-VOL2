@@ -9,14 +9,17 @@ import {
   type Hex,
   WaitForTransactionReceiptTimeoutError,
 } from 'viem';
-import type { SignedResponse } from '../src/airnode/attestation.ts';
 import { vaultAbi } from '../src/chain/vault-abi.ts';
 import { TxTimeout, VaultRejection } from '../src/chain/vault.ts';
-import { assetIdOf, checkPrice, revertReason, toVaultResponse, ViemVault } from '../src/chain/viem-vault.ts';
+import { assetIdOf, checkPrice, revertReason, ViemVault } from '../src/chain/viem-vault.ts';
 import { loadProfiles } from '../src/profiles.ts';
-import { readSharedJson } from './helpers.ts';
+import { readHermesResponse } from '../src/pyth/hermes.ts';
+import { accountIdOf, snowflakeAt } from '../src/sources/posts.ts';
+import { readPythFixture, readSharedJson } from './helpers.ts';
 
-const fixture = (file: string) => readSharedJson<SignedResponse>(`fixtures/synthetic/${file}`);
+const p0 = readHermesResponse(readPythFixture('eth-p0'));
+const p1 = readHermesResponse(readPythFixture('eth-p1'));
+const POST_ID = snowflakeAt(1794057378, 3n);
 const VAULT: Address = '0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0';
 const USER: Address = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
 
@@ -33,10 +36,13 @@ const revert = (errorName: string, args: unknown[] = []) =>
 // A vault whose simulation records each call and then fails, so no transaction is sent
 const recordingVault = (failWith: Error) => {
   const sent: Hex[] = [];
+  const values: (bigint | undefined)[] = [];
   const publicClient = {
-    simulateContract: async (params: { functionName: string; args: unknown[] }) => {
+    readContract: async () => 30n,
+    simulateContract: async (params: { functionName: string; args: unknown[]; value?: bigint }) => {
       const { encodeFunctionData } = await import('viem');
       sent.push(encodeFunctionData({ abi: vaultAbi, functionName: params.functionName, args: params.args } as never));
+      values.push(params.value);
       throw failWith;
     },
   };
@@ -47,7 +53,7 @@ const recordingVault = (failWith: Error) => {
     profiles: loadProfiles(),
     watchlist: [],
   });
-  return { vault, sent };
+  return { vault, sent, values };
 };
 
 test('asset ids are keccak256 of the key, as the deploy script registers them', () => {
@@ -55,76 +61,66 @@ test('asset ids are keccak256 of the key, as the deploy script registers them', 
   for (const [key, id] of Object.entries(deployment.assetIds)) assert.equal(assetIdOf(key), id, key);
 });
 
-test('a signed response goes to the vault with its request hash and its data as exact bytes', () => {
-  const post = fixture('tweet-musk-doge.json');
-  const encoded = toVaultResponse(post);
-  assert.equal(encoded.requestHash, post.requestHash);
-  assert.equal(encoded.timestamp, BigInt(post.timestamp));
-  assert.equal(Buffer.from(encoded.data.slice(2), 'hex').toString('utf8'), post.data);
-  assert.equal(encoded.signature, post.signature);
-});
-
-test('checkPrice reads the vault with no wallet, names a refusal and passes an RPC failure through', async () => {
-  const response = fixture('eth-p1-rise.json');
-  const asked: { functionName: string; args: unknown[] }[] = [];
+test('checkPrice pays the fee inside an eth_call, names a refusal and passes an RPC failure through', async () => {
+  const asked: { functionName: string; args: unknown[]; value?: bigint; account?: unknown }[] = [];
   const answering = (answer: () => unknown) =>
     ({
-      readContract: async (params: { functionName: string; args: unknown[] }) => {
+      readContract: async () => 30n,
+      simulateContract: async (params: { functionName: string; args: unknown[]; value?: bigint }) => {
         asked.push(params);
-        return answer();
+        return { result: answer() };
       },
     }) as never;
 
-  const read = await checkPrice(answering(() => [2070n, 1793381220n]), VAULT, 'ETH', response);
-  assert.deepEqual(read, { price: 2070n, priceTime: 1793381220n });
+  const read = await checkPrice(answering(() => [2244n, 1794059218n]), VAULT, 'ETH', p1);
+  assert.deepEqual(read, { price: 2244n, priceTime: 1794059218n, fee: 30n });
   assert.equal(asked[0]?.functionName, 'checkPrice');
-  assert.deepEqual(asked[0]?.args, [assetIdOf('ETH'), toVaultResponse(response)]);
+  assert.deepEqual(asked[0]?.args, [assetIdOf('ETH'), p1.updates]);
+  assert.equal(asked[0]?.value, 30n);
 
   await assert.rejects(
-    checkPrice(answering(() => { throw revert('ResponseTooOld', [1n]); }), VAULT, 'ETH', response),
-    (error) => error instanceof VaultRejection && error.reason === 'ResponseTooOld'
+    checkPrice(answering(() => { throw revert('PriceTooOld', [1n]); }), VAULT, 'ETH', p1),
+    (error) => error instanceof VaultRejection && error.reason === 'PriceTooOld'
   );
   await assert.rejects(
-    checkPrice(answering(() => { throw new Error('rpc down'); }), VAULT, 'ETH', response),
+    checkPrice(answering(() => { throw new Error('rpc down'); }), VAULT, 'ETH', p1),
     /rpc down/
   );
 });
 
-test('opens a trigger as openTrigger(user, assetId, tweet, p0) and names the revert', async () => {
-  const { vault, sent } = recordingVault(revert('AccountNotWatched', [USER, '0x' + '11'.repeat(32)]));
+test('opens a trigger as openTrigger(user, assetId, account, tweetId, p0) with Pyth’s fee, and names the revert', async () => {
+  const { vault, sent, values } = recordingVault(revert('AccountNotWatched', [USER, '0x' + '11'.repeat(32)]));
   await assert.rejects(
-    vault.openTrigger({
-      ruleId: USER,
-      asset: 'OIL',
-      account: 'realDonaldTrump',
-      post: fixture('tweet-trump-venezuela.json'),
-      p0: fixture('oil-p0.json'),
-    }),
+    vault.openTrigger({ ruleId: USER, asset: 'ETH', account: 'realDonaldTrump', postId: POST_ID, p0 }),
     (error) => error instanceof VaultRejection && error.reason === 'AccountNotWatched'
   );
   const decoded = decodeFunctionData({ abi: vaultAbi, data: sent[0] as Hex });
   assert.equal(decoded.functionName, 'openTrigger');
   if (decoded.functionName !== 'openTrigger') return;
-  const [user, assetId, tweet, p0] = decoded.args;
+  const [user, assetId, account, tweetId, update] = decoded.args;
   assert.equal(user, USER);
-  assert.equal(assetId, assetIdOf('OIL'));
-  assert.equal(tweet.requestHash, fixture('tweet-trump-venezuela.json').requestHash);
-  assert.equal(p0.timestamp, BigInt(fixture('oil-p0.json').timestamp));
+  assert.equal(assetId, assetIdOf('ETH'));
+  assert.equal(account, accountIdOf('realDonaldTrump'));
+  assert.equal(tweetId, BigInt(POST_ID));
+  assert.deepEqual(update, p0.updates);
+  assert.deepEqual(values, [30n]);
 });
 
-test('maps sells to the vault reasons and refuses a stop loss the vault does not have', async () => {
+test('maps every sell kind to the vault’s reason, stop-loss included', async () => {
   const { vault, sent } = recordingVault(revert('TakeProfitNotReached', [1n, 2n]));
-  await assert.rejects(vault.sell('3', 'take-profit', fixture('eth-p1-rise.json')), { reason: 'TakeProfitNotReached' });
-  const decoded = decodeFunctionData({ abi: vaultAbi, data: sent[0] as Hex });
-  assert.equal(decoded.functionName, 'sell');
-  if (decoded.functionName === 'sell') assert.equal(decoded.args[1], 1);
-  await assert.rejects(vault.sell('3', 'stop-loss', fixture('eth-p1-rise.json')), { reason: 'SellKindNotSupported' });
-  assert.equal(sent.length, 1, 'the stop loss never reached the chain');
-  assert.deepEqual(vault.keeperSellKinds, ['take-profit', 'stagnation']);
+  for (const kind of ['manual', 'take-profit', 'stagnation', 'stop-loss'] as const) {
+    await assert.rejects(vault.sell('3', kind, p1), { reason: 'TakeProfitNotReached' });
+  }
+  const reasons = sent.map((data) => {
+    const decoded = decodeFunctionData({ abi: vaultAbi, data });
+    return decoded.functionName === 'sell' ? decoded.args[1] : undefined;
+  });
+  assert.deepEqual(reasons, [0, 1, 2, 3]);
+  assert.deepEqual(vault.keeperSellKinds, ['take-profit', 'stop-loss', 'stagnation']);
 });
 
-test('names the attestation error of a forged response', () => {
-  assert.equal(revertReason(revert('NotSignedByAirnode', ['0x9aAD9AF9D2d0B9429F6e1C18FA733F41926BC678'])), 'NotSignedByAirnode');
+test('names the vault’s error for a forged price', () => {
+  assert.equal(revertReason(revert('InvalidPriceUpdate')), 'InvalidPriceUpdate');
   assert.equal(revertReason(revert('SpikeTooHigh', [1n, 2n])), 'SpikeTooHigh');
   assert.equal(revertReason(new Error('socket hang up')), 'socket hang up');
 });
@@ -132,13 +128,7 @@ test('names the attestation error of a forged response', () => {
 test('an RPC failure is not a refusal: it passes through so the engine retries', async () => {
   const { vault } = recordingVault(new Error('fetch failed'));
   await assert.rejects(
-    vault.openTrigger({
-      ruleId: USER,
-      asset: 'OIL',
-      account: 'realDonaldTrump',
-      post: fixture('tweet-trump-venezuela.json'),
-      p0: fixture('oil-p0.json'),
-    }),
+    vault.openTrigger({ ruleId: USER, asset: 'ETH', account: 'realDonaldTrump', postId: POST_ID, p0 }),
     (error) => !(error instanceof VaultRejection) && /fetch failed/.test(String(error))
   );
 });
@@ -203,6 +193,7 @@ test("the open triggers of the agent's users come from TriggerOpened and each tr
     takeProfitBps: 800,
     stagnationBandBps: 100,
     stagnationDelay: 600,
+    stopLossBps: 500,
   };
   const events: Record<string, unknown[]> = {
     RuleSet: [
@@ -359,7 +350,7 @@ test('names a revert that first shows up when the transaction is sent', async ()
       throw new ContractFunctionExecutionError(
         new ContractFunctionRevertedError({
           abi: request.abi,
-          data: encodeErrorResult({ abi: vaultAbi, errorName: 'ResponseTooOld', args: [1n] }),
+          data: encodeErrorResult({ abi: vaultAbi, errorName: 'PriceTooOld', args: [1n] }),
           functionName: request.functionName,
         }),
         { abi: request.abi, functionName: request.functionName, args: [], contractAddress: VAULT }
@@ -373,5 +364,43 @@ test('names a revert that first shows up when the transaction is sent', async ()
     profiles: loadProfiles(),
     watchlist: [],
   });
-  await assert.rejects(vault.expireTrigger('1'), { reason: 'ResponseTooOld' });
+  await assert.rejects(vault.expireTrigger('1'), { reason: 'PriceTooOld' });
+});
+
+test('a bought position carries the exits it was bought with, read from the vault', async () => {
+  const eth = assetIdOf('ETH');
+  const vault = new ViemVault({
+    address: VAULT,
+    publicClient: {
+      getBlockNumber: async () => 10n,
+      getContractEvents: async ({ eventName }: { eventName: string }) =>
+        eventName === 'TriggerConfirmed'
+          ? [{ args: { positionId: 4n } }]
+          : eventName === 'RuleSet'
+            ? [
+                {
+                  args: {
+                    user: USER,
+                    rule: { agent: USER, buyAmount: 1n, maxPerTrade: 1n, dailyLimit: 1n },
+                    assetIds: [],
+                    assetRules: [],
+                    assetTopics: [],
+                    watchedAccounts: [],
+                  },
+                },
+              ]
+            : [],
+      readContract: async ({ functionName }: { functionName: string }) =>
+        functionName === 'getPosition'
+          ? { user: USER, assetId: eth, amount: 5n, cost: 1n, entryPrice: 7n, openedAt: 9n, isOpen: true }
+          : functionName === 'getPositionExits'
+            ? { takeProfitBps: 800, stopLossBps: 500, stagnationBandBps: 100, stagnationDelay: 600 }
+            : false,
+    } as never,
+    walletClient: { account: { address: USER } } as never,
+    profiles: loadProfiles(),
+    watchlist: [],
+  });
+  const [position] = await vault.listPositions();
+  assert.deepEqual(position?.exits, { takeProfitBps: 800, stopLossBps: 500, stagnationBandBps: 100, stagnationAfterSec: 600 });
 });

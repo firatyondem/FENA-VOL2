@@ -1,6 +1,6 @@
 // The accounts the agent can read: agent/config/watchlist.json, plus our demo account when DEMO_X_HANDLE is set.
 import { readFileSync } from 'node:fs';
-import type { WatchedAccount } from './twitter.ts';
+import type { WatchedAccount } from './posts.ts';
 
 export const WATCHLIST_URL = new URL('../../config/watchlist.json', import.meta.url);
 

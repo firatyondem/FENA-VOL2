@@ -179,14 +179,14 @@ contract VaultTest is VaultTestBase {
     function oilProfile() internal view returns (IVault.AssetProfile memory) {
         return IVault.AssetProfile({
             token: address(toil),
-            airnode: priceAirnode,
-            priceRequestHash: OIL_PRICE_REQUEST,
+            priceId: OIL_FEED,
             minThresholdBps: 150,
             maxSpikeCapBps: 500,
             minWait: 1 hours,
             maxWindow: 6 hours,
             maxPriceAge: 5 minutes,
-            updatedAtInMs: true
+            maxConfBps: 200,
+            maxStopLossBps: 2000
         });
     }
 
@@ -200,7 +200,8 @@ contract VaultTest is VaultTestBase {
             budgetShareBps: 5_000,
             takeProfitBps: 800,
             stagnationBandBps: 100,
-            stagnationDelay: 24 hours
+            stagnationDelay: 24 hours,
+            stopLossBps: 0
         });
     }
 

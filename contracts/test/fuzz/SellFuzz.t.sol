@@ -32,9 +32,9 @@ contract SellFuzzTest is FuzzBase {
         uint256 priceSeed,
         uint8 mode
     ) public {
-        entry = bound(entry, 1000, MAX_PRICE);
+        entry = pythPrice(bound(entry, 1000, MAX_PRICE));
         takeProfitBps = bound(takeProfitBps, 0, type(uint16).max);
-        uint256 price = pickTakeProfitPrice(entry, takeProfitBps, priceSeed, mode);
+        uint256 price = pythPrice(pickTakeProfitPrice(entry, takeProfitBps, priceSeed, mode));
         uint256 product = entry * (BPS + takeProfitBps);
 
         IVault.AssetRule memory assetRule = looseEthRule();
@@ -64,7 +64,7 @@ contract SellFuzzTest is FuzzBase {
     }
 
     function sellForTakeProfit(uint256 positionId, uint256 price, bool shouldSell) internal {
-        IVault.SignedResponse memory response = signedEthPrice(price, block.timestamp);
+        bytes[] memory response = signedEthPrice(price, block.timestamp);
         if (!shouldSell) {
             vm.expectPartialRevert(IVault.TakeProfitNotReached.selector);
             vm.prank(keeper);
@@ -96,7 +96,7 @@ contract SellFuzzTest is FuzzBase {
         uint256 priceSeed,
         uint8 mode
     ) public {
-        entry = bound(entry, 1000, MAX_PRICE);
+        entry = pythPrice(bound(entry, 1000, MAX_PRICE));
         // At most 90%, so that every price inside the band is still at least a tenth of the entry and the DEX never
         // rounds a sell to zero
         bandBps = bound(bandBps, 0, 9_000);
@@ -111,7 +111,7 @@ contract SellFuzzTest is FuzzBase {
         } else {
             elapsed = bound(elapsed, 0, delay + 1 days);
         }
-        uint256 price = pickStagnationPrice(entry, bandBps, priceSeed, (mode / 3) % 5);
+        uint256 price = pythPrice(pickStagnationPrice(entry, bandBps, priceSeed, (mode / 3) % 5));
 
         vm.warp(vault.getPosition(positionId).openedAt + elapsed);
         sellForStagnation(positionId, price, bandBps, delay, elapsed);
@@ -143,7 +143,7 @@ contract SellFuzzTest is FuzzBase {
         internal
     {
         IVault.Position memory position = vault.getPosition(positionId);
-        IVault.SignedResponse memory response = signedEthPrice(price, block.timestamp);
+        bytes[] memory response = signedEthPrice(price, block.timestamp);
         uint256 distance = price > position.entryPrice ? price - position.entryPrice : position.entryPrice - price;
         if (elapsed < delay) {
             vm.expectRevert(abi.encodeWithSelector(IVault.StagnationDelayNotOver.selector, position.openedAt + delay));
@@ -174,7 +174,7 @@ contract SellFuzzTest is FuzzBase {
     function testFuzz_BuyThenSellAtTheSamePriceNeverCreatesValue(uint256 price, uint256 amount) public {
         // From 0.001 mock USDC, so that a sell is never rounded to zero and refused by the DEX
         amount = bound(amount, 1000, MAX_AMOUNT);
-        price = bound(price, 1000, MAX_PRICE);
+        price = pythPrice(bound(price, 1000, MAX_PRICE));
         fund(user, amount);
         setUserEthRule(userRuleOf(amount, amount), looseEthRule());
         uint256 balanceBefore = vault.balanceOf(user);
@@ -185,7 +185,7 @@ contract SellFuzzTest is FuzzBase {
         assertEq(vault.balanceOf(user), balanceBefore - amount, "balance after the buy");
 
         vm.warp(block.timestamp + 1);
-        IVault.SignedResponse memory response = signedEthPrice(price, block.timestamp);
+        bytes[] memory response = signedEthPrice(price, block.timestamp);
         vm.prank(user);
         uint256 quoteOut = vault.sell(positionId, IVault.SellReason.Manual, response);
 

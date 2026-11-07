@@ -4,7 +4,7 @@ import { type RuleConfig, setRuleArgs } from '../src/chain/setup.ts';
 import { replayRule, runTamperBench } from '../src/replay.ts';
 import { EventLog } from '../src/log.ts';
 import { loadProfiles } from '../src/profiles.ts';
-import type { WatchedAccount } from '../src/sources/twitter.ts';
+import type { WatchedAccount } from '../src/sources/posts.ts';
 import { readSharedJson } from './helpers.ts';
 
 const profiles = loadProfiles();
@@ -14,10 +14,10 @@ test('the tamper bench shows the four rejections the spec asks for', async () =>
   await runTamperBench(profiles, log);
   const results = log.recent().map((event) => (event.kind === 'tamper.result' ? [event.name, event.actual, event.passed] : []));
   assert.deepEqual(results, [
-    ['Edited value', 'NotSignedByAirnode', true],
-    ['Stale response', 'ResponseTooOld', true],
-    ['Different request', 'WrongRequestHash', true],
-    ['Wrong signer', 'NotSignedByAirnode', true],
+    ['Edited price', 'InvalidPriceUpdate', true],
+    ['Old price', 'PriceTooOld', true],
+    ['Wrong asset', 'WrongPriceFeed', true],
+    ['Replayed price', 'PriceAlreadyUsed', true],
   ]);
 });
 
@@ -61,7 +61,7 @@ test('the watchlist links each account to assets that have profiles', () => {
   const watchlist = readSharedJson<{ handle: string; assets: string[] }[]>('../agent/config/watchlist.json');
   assert.deepEqual(
     watchlist.map((account) => account.handle),
-    ['realDonaldTrump', 'elonmusk', 'JDVance', 'marcorubio', 'fenahackdemo']
+    ['realDonaldTrump', 'elonmusk', 'JDVance', 'marcorubio', 'fenahackdemo', 'EuphratY']
   );
   for (const account of watchlist) for (const asset of account.assets) assert.ok(profiles.assets[asset], asset);
 });

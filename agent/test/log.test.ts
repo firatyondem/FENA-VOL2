@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { EventLog, type LoggedEvent, redactUrls } from '../src/log.ts';
 
-const event = (n: number) => ({ kind: 'payment.settled' as const, transaction: `0x${n}` });
+const event = (n: number) => ({ kind: 'error' as const, where: 'test', message: `0x${n}` });
 
 test('numbers events and keeps only the newest', () => {
   const log = new EventLog({ capacity: 3, now: () => 42 });
@@ -39,7 +39,7 @@ test('appends JSON lines to a file', () => {
   log.append(event(2));
   const lines = readFileSync(file, 'utf8').trim().split('\n');
   assert.equal(lines.length, 2);
-  assert.equal(JSON.parse(lines[1] as string).transaction, '0x2');
+  assert.equal(JSON.parse(lines[1] as string).message, '0x2');
 });
 
 // The shape of a viem error from an Alchemy RPC: the key is the last part of the URL's path

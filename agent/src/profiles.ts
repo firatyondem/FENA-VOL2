@@ -1,18 +1,10 @@
+// shared/asset-profiles.json: each asset's Pyth feed and the limits a rule may tighten, read once at start-up.
 import { readFileSync } from 'node:fs';
-import type { Address } from 'viem';
-import type { AirnodeRequest, SignedResponse } from './airnode/attestation.ts';
-import { readUint } from './airnode/projected-json.ts';
+import type { Address, Hex } from 'viem';
+import { findPrice, toPrice18 } from './pyth/accumulator.ts';
+import type { PriceUpdate } from './pyth/hermes.ts';
 
-export type Market = '24/7' | '24/5' | 'exchange-hours';
-
-export interface PriceSource {
-  airnode: string;
-  operation: string;
-  parameters: Record<string, unknown>;
-  responseProjection: Record<string, string>;
-  timeField: string;
-  timeUnit: 'ms' | 's';
-}
+export type Market = '24/7' | '24/5' | '23/5' | 'exchange-hours';
 
 export interface AssetProfile {
   key: string;
@@ -23,13 +15,8 @@ export interface AssetProfile {
   spikeCapBps: number;
   minWaitSec: number;
   maxWindowSec: number;
-  price: PriceSource;
+  pyth: { priceId: Hex; symbol: string };
   suggestedTopics: string[];
-}
-
-export interface AirnodeEndpoint {
-  url: string;
-  address: Address;
 }
 
 export interface Profiles {
@@ -37,9 +24,13 @@ export interface Profiles {
   usdcDecimals: number;
   maxPriceAgeSec: number;
   maxTweetToP0Sec: number;
+  // Posts are not signed, so the vault refuses a post older than this when the trigger opens (Vault.MAX_POST_AGE)
+  maxPostAgeSec: number;
+  maxConfBps: number;
+  maxStopLossBps: number;
   ruleDefaults: Record<string, number>;
   demoOverrides: Record<string, number>;
-  airnodes: Record<string, AirnodeEndpoint>;
+  pyth: { contracts: Record<string, Address>; hermesUrl: string };
   assets: Record<string, AssetProfile>;
 }
 
@@ -53,9 +44,9 @@ const requireNumber = (value: unknown, where: string) => {
 // Checks the shape once at start-up, so a typo in the shared file fails loudly instead of mid-trigger.
 export const parseProfiles = (raw: unknown): Profiles => {
   const file = raw as Profiles & { assets: Record<string, Omit<AssetProfile, 'key'>> };
-  requireNumber(file.priceDecimals, 'priceDecimals');
-  requireNumber(file.maxPriceAgeSec, 'maxPriceAgeSec');
-  requireNumber(file.maxTweetToP0Sec, 'maxTweetToP0Sec');
+  for (const field of ['priceDecimals', 'maxPriceAgeSec', 'maxTweetToP0Sec', 'maxPostAgeSec', 'maxConfBps'] as const) {
+    requireNumber(file[field], field);
+  }
   const assets: Record<string, AssetProfile> = {};
   for (const [key, asset] of Object.entries(file.assets ?? {})) {
     for (const field of ['trendThresholdBps', 'spikeCapBps', 'minWaitSec', 'maxWindowSec'] as const) {
@@ -63,7 +54,7 @@ export const parseProfiles = (raw: unknown): Profiles => {
     }
     if (asset.spikeCapBps <= asset.trendThresholdBps) throw new Error(`${key}: the spike cap must exceed the threshold`);
     if (asset.maxWindowSec <= asset.minWaitSec) throw new Error(`${key}: the window must end after the minimum wait`);
-    if (!file.airnodes?.[asset.price?.airnode]) throw new Error(`${key}: unknown Airnode ${asset.price?.airnode}`);
+    if (!/^0x[0-9a-f]{64}$/.test(asset.pyth?.priceId ?? '')) throw new Error(`${key}: pyth.priceId must be a feed ID`);
     assets[key] = { ...asset, key };
   }
   return { ...file, assets };
@@ -78,43 +69,44 @@ export const getAsset = (profiles: Profiles, key: string): AssetProfile => {
   return asset;
 };
 
-export const priceRequest = (asset: AssetProfile): AirnodeRequest => ({
-  operation: asset.price.operation,
-  parameters: asset.price.parameters,
-  responseProjection: asset.price.responseProjection,
-});
-
-export const priceAirnode = (profiles: Profiles, asset: AssetProfile): AirnodeEndpoint => {
-  const endpoint = profiles.airnodes[asset.price.airnode];
-  if (!endpoint) throw new Error(`Unknown Airnode ${asset.price.airnode}`);
-  return endpoint;
-};
-
-export interface SignedPrice {
-  asset: string;
-  // USD per whole asset token, with `priceDecimals` decimals
+// What the gates need of a price: the value with 18 decimals and when Pyth published it. A trigger restored after a
+// restart has only these, read from the vault.
+export interface PricePoint {
   price: bigint;
-  // When the data source took the price, in seconds
   sourceTime: number;
-  // When the Airnode signed the response, in seconds
-  signedAt: number;
-  response: SignedResponse;
 }
 
-// What the gates need of a price: the value and when the source took it. A trigger restored after a restart has only
-// these, read from the vault.
-export type PricePoint = Pick<SignedPrice, 'price' | 'sourceTime'>;
+export interface SignedPrice extends PricePoint {
+  asset: string;
+  // Pyth's confidence interval, with 18 decimals
+  conf: bigint;
+  // When Pyth published the feed's price before this one: P0 must have no price between the post and itself
+  prevPublishTime: number;
+  // The bytes the vault takes
+  update: PriceUpdate;
+}
 
-export const readSignedPrice = (profiles: Profiles, asset: AssetProfile, response: SignedResponse): SignedPrice => {
-  const price = readUint(response.data, 'price', profiles.priceDecimals);
-  const rawTime = readUint(response.data, asset.price.timeField, 0);
-  const sourceTime = Number(asset.price.timeUnit === 'ms' ? rawTime / 1000n : rawTime);
-  return { asset: asset.key, price, sourceTime, signedAt: Number(response.timestamp), response };
+// The asset's price in a Pyth update, as the vault reads it
+export const readPythPrice = (asset: AssetProfile, update: PriceUpdate): SignedPrice => {
+  const price = findPrice(update.updates, asset.pyth.priceId);
+  if (!price) throw new Error(`The update has no ${asset.pyth.symbol} price`);
+  return {
+    asset: asset.key,
+    price: price.price > 0n ? toPrice18(price.price, price.expo) : 0n,
+    conf: toPrice18(price.conf, price.expo),
+    sourceTime: price.publishTime,
+    prevPublishTime: price.prevPublishTime,
+    update,
+  };
 };
 
-// The spec's market-hours rule: a closed market has no fresh trades, so a stale source time blocks the trade.
-export const isPriceFresh = (profiles: Profiles, price: SignedPrice, nowSec: number) =>
-  nowSec - price.sourceTime <= profiles.maxPriceAgeSec && nowSec - price.signedAt <= profiles.maxPriceAgeSec;
+// The vault's market-hours rule: a closed market publishes no new prices, so a stale P1 or sell price blocks the trade.
+export const isPriceFresh = (profiles: Profiles, price: PricePoint, nowSec: number) =>
+  nowSec - price.sourceTime <= profiles.maxPriceAgeSec;
+
+// The vault's confidence rule: conf / price at most maxConfBps
+export const isPriceCertain = (profiles: Profiles, price: SignedPrice) =>
+  price.price > 0n && price.conf * 10_000n <= price.price * BigInt(profiles.maxConfBps);
 
 export interface RuleWindow {
   trendThresholdBps: number;

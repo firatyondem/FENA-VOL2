@@ -144,9 +144,9 @@ contract DailyBudgetBoundariesTest is UnitBase {
         uint256 day = block.timestamp / 1 days;
 
         buyEth();
-        uint256 oilTriggerId = openTriggerFor(user, agent, OIL, OIL_PRICE_REQUEST, "80");
+        uint256 oilTriggerId = openTriggerFor(user, agent, OIL, OIL_FEED, "80");
         vm.warp(block.timestamp + 61 minutes);
-        IVault.SignedResponse memory oilP1 = signedPriceOf(OIL_PRICE_REQUEST, "81.5", block.timestamp);
+        bytes[] memory oilP1 = signedPriceOf(OIL_FEED, "81.5", block.timestamp);
         vault.confirmTrigger(oilTriggerId, oilP1);
         assertEq(vault.spentToday(user, ETH) + vault.spentToday(user, OIL), 100e6);
         assertEq(vault.balanceOf(user), 10_000e6 - 100e6);
@@ -178,7 +178,7 @@ contract DailyBudgetBoundariesTest is UnitBase {
 
         // Last second of the day: the budget is spent.
         vm.warp(midnight - 1);
-        IVault.SignedResponse memory lastSecond = signedPrice("2070");
+        bytes[] memory lastSecond = signedPrice("2070");
         vm.expectRevert(abi.encodeWithSelector(IVault.DailyBudgetExceeded.selector, 50e6, 0));
         vault.confirmTrigger(triggerId, lastSecond);
 
@@ -213,7 +213,7 @@ contract DailyBudgetBoundariesTest is UnitBase {
     function expectBuyToRevertWith(bytes memory revertData) private {
         (uint256 triggerId, uint256 t0) = openEthTriggerNow("2000");
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
         uint256 balanceBefore = vault.balanceOf(user);
 
         vm.expectRevert(revertData);
@@ -245,7 +245,7 @@ contract CooldownBoundariesTest is UnitBase {
 
     function test_RevertWhen_TheCooldownHasOneSecondLeft() public {
         vm.warp(boughtAt + 24 hours - 1);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.CooldownActive.selector, boughtAt + 24 hours));
         vault.confirmTrigger(secondTriggerId, p1);
@@ -276,7 +276,7 @@ contract ShortCooldownBoundariesTest is UnitBase {
 
     function test_RevertWhen_TheCooldownHasOneSecondLeft() public {
         vm.warp(lastBuyAt + 32 minutes - 1);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.CooldownActive.selector, lastBuyAt + 32 minutes));
         vault.confirmTrigger(nextTriggerId, p1);

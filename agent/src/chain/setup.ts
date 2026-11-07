@@ -10,8 +10,7 @@ import {
   type Transport,
   type WalletClient,
 } from 'viem';
-import { deriveRequestHash } from '../airnode/attestation.ts';
-import { latestTweetRequest, type WatchedAccount } from '../sources/twitter.ts';
+import { accountIdOf, type WatchedAccount } from '../sources/posts.ts';
 import { mockUsdcAbi, vaultAbi } from './vault-abi.ts';
 import { assetIdOf } from './viem-vault.ts';
 
@@ -33,6 +32,8 @@ export interface RuleConfig {
     takeProfitBps: number;
     stagnationBandBps: number;
     stagnationAfterSec: number;
+    // 0 turns stop-loss off; at most the profile's maxStopLossBps
+    stopLossBps?: number;
     topics: string[];
   }[];
 }
@@ -43,7 +44,7 @@ export const setRuleArgs = (config: RuleConfig, agent: Address, watchlist: Watch
   const accounts = config.accounts.map((handle) => {
     const watched = watchlist.find((account) => account.handle === handle);
     if (!watched) throw new Error(`@${handle} is not in the watchlist`);
-    return deriveRequestHash(latestTweetRequest(watched));
+    return accountIdOf(watched.handle);
   });
   return [
     { agent, buyAmount: usdc(config.buyAmountUsdc), maxPerTrade: usdc(config.maxPerTradeUsdc), dailyLimit: usdc(config.dailyLimitUsdc) },
@@ -58,6 +59,7 @@ export const setRuleArgs = (config: RuleConfig, agent: Address, watchlist: Watch
       takeProfitBps: asset.takeProfitBps,
       stagnationBandBps: asset.stagnationBandBps,
       stagnationDelay: asset.stagnationAfterSec,
+      stopLossBps: asset.stopLossBps ?? 0,
     })),
     config.assets.map((asset) => asset.topics.join(', ')),
     accounts,

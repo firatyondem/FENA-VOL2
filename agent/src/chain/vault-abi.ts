@@ -13,13 +13,18 @@ export const vaultAbi = [
         "name": "dex_",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "pyth_",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "nonpayable"
   },
   {
     "type": "function",
-    "name": "MAX_POST_TO_P0",
+    "name": "MAX_POST_AGE",
     "inputs": [],
     "outputs": [
       {
@@ -32,7 +37,7 @@ export const vaultAbi = [
   },
   {
     "type": "function",
-    "name": "MAX_RESPONSE_AGE",
+    "name": "MAX_POST_TO_P0",
     "inputs": [],
     "outputs": [
       {
@@ -72,31 +77,9 @@ export const vaultAbi = [
         "internalType": "bytes32"
       },
       {
-        "name": "response",
-        "type": "tuple",
-        "internalType": "struct IVault.SignedResponse",
-        "components": [
-          {
-            "name": "requestHash",
-            "type": "bytes32",
-            "internalType": "bytes32"
-          },
-          {
-            "name": "timestamp",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "data",
-            "type": "bytes",
-            "internalType": "bytes"
-          },
-          {
-            "name": "signature",
-            "type": "bytes",
-            "internalType": "bytes"
-          }
-        ]
+        "name": "priceUpdate",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
       }
     ],
     "outputs": [
@@ -106,12 +89,12 @@ export const vaultAbi = [
         "internalType": "uint256"
       },
       {
-        "name": "priceTime",
+        "name": "publishTime",
         "type": "uint256",
         "internalType": "uint256"
       }
     ],
-    "stateMutability": "view"
+    "stateMutability": "payable"
   },
   {
     "type": "function",
@@ -123,31 +106,9 @@ export const vaultAbi = [
         "internalType": "uint256"
       },
       {
-        "name": "p1",
-        "type": "tuple",
-        "internalType": "struct IVault.SignedResponse",
-        "components": [
-          {
-            "name": "requestHash",
-            "type": "bytes32",
-            "internalType": "bytes32"
-          },
-          {
-            "name": "timestamp",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "data",
-            "type": "bytes",
-            "internalType": "bytes"
-          },
-          {
-            "name": "signature",
-            "type": "bytes",
-            "internalType": "bytes"
-          }
-        ]
+        "name": "p1Update",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
       }
     ],
     "outputs": [
@@ -157,7 +118,7 @@ export const vaultAbi = [
         "internalType": "uint256"
       }
     ],
-    "stateMutability": "nonpayable"
+    "stateMutability": "payable"
   },
   {
     "type": "function",
@@ -220,12 +181,7 @@ export const vaultAbi = [
             "internalType": "address"
           },
           {
-            "name": "airnode",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "priceRequestHash",
+            "name": "priceId",
             "type": "bytes32",
             "internalType": "bytes32"
           },
@@ -255,9 +211,14 @@ export const vaultAbi = [
             "internalType": "uint32"
           },
           {
-            "name": "updatedAtInMs",
-            "type": "bool",
-            "internalType": "bool"
+            "name": "maxConfBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "maxStopLossBps",
+            "type": "uint16",
+            "internalType": "uint16"
           }
         ]
       }
@@ -334,6 +295,11 @@ export const vaultAbi = [
             "name": "stagnationDelay",
             "type": "uint32",
             "internalType": "uint32"
+          },
+          {
+            "name": "stopLossBps",
+            "type": "uint16",
+            "internalType": "uint16"
           }
         ]
       }
@@ -390,6 +356,47 @@ export const vaultAbi = [
             "name": "isOpen",
             "type": "bool",
             "internalType": "bool"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getPositionExits",
+    "inputs": [
+      {
+        "name": "positionId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct IVault.PositionExits",
+        "components": [
+          {
+            "name": "takeProfitBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "stopLossBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "stagnationBandBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "stagnationDelay",
+            "type": "uint32",
+            "internalType": "uint32"
           }
         ]
       }
@@ -505,31 +512,31 @@ export const vaultAbi = [
   },
   {
     "type": "function",
-    "name": "getWatchableAccount",
-    "inputs": [
-      {
-        "name": "account",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "airnode",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "isPaused",
     "inputs": [
       {
         "name": "user",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "isWatchableAccount",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "bytes32",
+        "internalType": "bytes32"
       }
     ],
     "outputs": [
@@ -556,58 +563,19 @@ export const vaultAbi = [
         "internalType": "bytes32"
       },
       {
-        "name": "tweet",
-        "type": "tuple",
-        "internalType": "struct IVault.SignedResponse",
-        "components": [
-          {
-            "name": "requestHash",
-            "type": "bytes32",
-            "internalType": "bytes32"
-          },
-          {
-            "name": "timestamp",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "data",
-            "type": "bytes",
-            "internalType": "bytes"
-          },
-          {
-            "name": "signature",
-            "type": "bytes",
-            "internalType": "bytes"
-          }
-        ]
+        "name": "account",
+        "type": "bytes32",
+        "internalType": "bytes32"
       },
       {
-        "name": "p0",
-        "type": "tuple",
-        "internalType": "struct IVault.SignedResponse",
-        "components": [
-          {
-            "name": "requestHash",
-            "type": "bytes32",
-            "internalType": "bytes32"
-          },
-          {
-            "name": "timestamp",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "data",
-            "type": "bytes",
-            "internalType": "bytes"
-          },
-          {
-            "name": "signature",
-            "type": "bytes",
-            "internalType": "bytes"
-          }
-        ]
+        "name": "tweetId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "p0Update",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
       }
     ],
     "outputs": [
@@ -617,7 +585,7 @@ export const vaultAbi = [
         "internalType": "uint256"
       }
     ],
-    "stateMutability": "nonpayable"
+    "stateMutability": "payable"
   },
   {
     "type": "function",
@@ -641,6 +609,19 @@ export const vaultAbi = [
         "name": "",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "pyth",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "view"
@@ -680,31 +661,9 @@ export const vaultAbi = [
         "internalType": "enum IVault.SellReason"
       },
       {
-        "name": "priceResponse",
-        "type": "tuple",
-        "internalType": "struct IVault.SignedResponse",
-        "components": [
-          {
-            "name": "requestHash",
-            "type": "bytes32",
-            "internalType": "bytes32"
-          },
-          {
-            "name": "timestamp",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "data",
-            "type": "bytes",
-            "internalType": "bytes"
-          },
-          {
-            "name": "signature",
-            "type": "bytes",
-            "internalType": "bytes"
-          }
-        ]
+        "name": "priceUpdate",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
       }
     ],
     "outputs": [
@@ -714,7 +673,7 @@ export const vaultAbi = [
         "internalType": "uint256"
       }
     ],
-    "stateMutability": "nonpayable"
+    "stateMutability": "payable"
   },
   {
     "type": "function",
@@ -736,12 +695,7 @@ export const vaultAbi = [
             "internalType": "address"
           },
           {
-            "name": "airnode",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "priceRequestHash",
+            "name": "priceId",
             "type": "bytes32",
             "internalType": "bytes32"
           },
@@ -771,9 +725,14 @@ export const vaultAbi = [
             "internalType": "uint32"
           },
           {
-            "name": "updatedAtInMs",
-            "type": "bool",
-            "internalType": "bool"
+            "name": "maxConfBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "maxStopLossBps",
+            "type": "uint16",
+            "internalType": "uint16"
           }
         ]
       }
@@ -879,6 +838,11 @@ export const vaultAbi = [
             "name": "stagnationDelay",
             "type": "uint32",
             "internalType": "uint32"
+          },
+          {
+            "name": "stopLossBps",
+            "type": "uint16",
+            "internalType": "uint16"
           }
         ]
       },
@@ -906,9 +870,9 @@ export const vaultAbi = [
         "internalType": "bytes32"
       },
       {
-        "name": "airnode",
-        "type": "address",
-        "internalType": "address"
+        "name": "isWatchable",
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
     "outputs": [],
@@ -966,6 +930,25 @@ export const vaultAbi = [
   },
   {
     "type": "function",
+    "name": "updateFee",
+    "inputs": [
+      {
+        "name": "priceUpdate",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "withdraw",
     "inputs": [
       {
@@ -999,12 +982,7 @@ export const vaultAbi = [
             "internalType": "address"
           },
           {
-            "name": "airnode",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "priceRequestHash",
+            "name": "priceId",
             "type": "bytes32",
             "internalType": "bytes32"
           },
@@ -1034,9 +1012,14 @@ export const vaultAbi = [
             "internalType": "uint32"
           },
           {
-            "name": "updatedAtInMs",
-            "type": "bool",
-            "internalType": "bool"
+            "name": "maxConfBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "maxStopLossBps",
+            "type": "uint16",
+            "internalType": "uint16"
           }
         ]
       }
@@ -1231,6 +1214,11 @@ export const vaultAbi = [
             "name": "stagnationDelay",
             "type": "uint32",
             "internalType": "uint32"
+          },
+          {
+            "name": "stopLossBps",
+            "type": "uint16",
+            "internalType": "uint16"
           }
         ]
       },
@@ -1359,10 +1347,10 @@ export const vaultAbi = [
         "internalType": "bytes32"
       },
       {
-        "name": "airnode",
-        "type": "address",
+        "name": "isWatchable",
+        "type": "bool",
         "indexed": false,
-        "internalType": "address"
+        "internalType": "bool"
       }
     ],
     "anonymous": false
@@ -1485,44 +1473,6 @@ export const vaultAbi = [
   },
   {
     "type": "error",
-    "name": "ECDSAInvalidSignature",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "ECDSAInvalidSignatureLength",
-    "inputs": [
-      {
-        "name": "length",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "ECDSAInvalidSignatureS",
-    "inputs": [
-      {
-        "name": "s",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "FieldNotFound",
-    "inputs": [
-      {
-        "name": "key",
-        "type": "string",
-        "internalType": "string"
-      }
-    ]
-  },
-  {
-    "type": "error",
     "name": "InsufficientBalance",
     "inputs": [
       {
@@ -1536,6 +1486,27 @@ export const vaultAbi = [
         "internalType": "uint256"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "InsufficientFee",
+    "inputs": [
+      {
+        "name": "sent",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "fee",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InvalidPriceUpdate",
+    "inputs": []
   },
   {
     "type": "error",
@@ -1559,17 +1530,6 @@ export const vaultAbi = [
     "inputs": [
       {
         "name": "caller",
-        "type": "address",
-        "internalType": "address"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "NotSignedByAirnode",
-    "inputs": [
-      {
-        "name": "signer",
         "type": "address",
         "internalType": "address"
       }
@@ -1626,6 +1586,33 @@ export const vaultAbi = [
   },
   {
     "type": "error",
+    "name": "PostOutsideWindow",
+    "inputs": [
+      {
+        "name": "tweetTime",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "PriceAlreadyUsed",
+    "inputs": [
+      {
+        "name": "assetId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "publishTime",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "PriceBeforeBuy",
     "inputs": [
       {
@@ -1639,6 +1626,27 @@ export const vaultAbi = [
         "internalType": "uint256"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "PriceNotFirstAfterPost",
+    "inputs": [
+      {
+        "name": "tweetTime",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "priceTime",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "PriceNotPositive",
+    "inputs": []
   },
   {
     "type": "error",
@@ -1677,7 +1685,23 @@ export const vaultAbi = [
     "name": "PriceTooOld",
     "inputs": [
       {
-        "name": "priceTimestamp",
+        "name": "publishTime",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "PriceTooUncertain",
+    "inputs": [
+      {
+        "name": "conf",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "price",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -1690,25 +1714,8 @@ export const vaultAbi = [
   },
   {
     "type": "error",
-    "name": "ResponseAlreadyUsed",
-    "inputs": [
-      {
-        "name": "responseHash",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "ResponseTooOld",
-    "inputs": [
-      {
-        "name": "responseTimestamp",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ]
+    "name": "RefundFailed",
+    "inputs": []
   },
   {
     "type": "error",
@@ -1765,6 +1772,22 @@ export const vaultAbi = [
     "inputs": [
       {
         "name": "earliest",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "StopLossNotReached",
+    "inputs": [
+      {
+        "name": "price",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "line",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -1836,17 +1859,6 @@ export const vaultAbi = [
   },
   {
     "type": "error",
-    "name": "UnexpectedValue",
-    "inputs": [
-      {
-        "name": "key",
-        "type": "string",
-        "internalType": "string"
-      }
-    ]
-  },
-  {
-    "type": "error",
     "name": "WaitNotOver",
     "inputs": [
       {
@@ -1880,15 +1892,10 @@ export const vaultAbi = [
   },
   {
     "type": "error",
-    "name": "WrongRequestHash",
+    "name": "WrongPriceFeed",
     "inputs": [
       {
-        "name": "expected",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "actual",
+        "name": "priceId",
         "type": "bytes32",
         "internalType": "bytes32"
       }

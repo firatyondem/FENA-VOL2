@@ -22,7 +22,7 @@ contract WindowBoundariesTest is UnitBase {
 
     function test_RevertWhen_P1IsOneSecondBeforeTheMinimumWait() public {
         vm.warp(t0 + 30 minutes - 1);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.WaitNotOver.selector, t0 + 30 minutes));
         vault.confirmTrigger(triggerId, p1);
@@ -35,7 +35,7 @@ contract WindowBoundariesTest is UnitBase {
 
     function test_RevertWhen_P1IsOneSecondAfterTheMaximumWindow() public {
         vm.warp(t0 + 4 hours + 1);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.WindowClosed.selector, t0 + 4 hours));
         vault.confirmTrigger(triggerId, p1);
@@ -44,7 +44,7 @@ contract WindowBoundariesTest is UnitBase {
     /// @dev The window is measured on the time the source took P1, not on the block time.
     function test_RevertWhen_P1WasTakenOneSecondBeforeTheMinimumWaitButSubmittedLater() public {
         vm.warp(t0 + 30 minutes + 1 minutes);
-        IVault.SignedResponse memory p1 = signedPriceAt("2070", t0 + 30 minutes - 1);
+        bytes[] memory p1 = signedPriceAt("2070", t0 + 30 minutes - 1);
 
         vm.expectRevert(abi.encodeWithSelector(IVault.WaitNotOver.selector, t0 + 30 minutes));
         vault.confirmTrigger(triggerId, p1);
@@ -52,7 +52,7 @@ contract WindowBoundariesTest is UnitBase {
 
     function test_ConfirmTrigger_BuysWithAP1TakenAtTheMaximumWindowAndSubmittedLater() public {
         vm.warp(t0 + 4 hours + 1 minutes);
-        IVault.SignedResponse memory p1 = signedPriceAt("2070", t0 + 4 hours);
+        bytes[] memory p1 = signedPriceAt("2070", t0 + 4 hours);
 
         vault.confirmTrigger(triggerId, p1);
         assertStatus(triggerId, IVault.TriggerStatus.Confirmed);
@@ -78,7 +78,7 @@ contract WindowBoundariesTest is UnitBase {
     function test_RevertWhen_AnExpiredTriggerIsConfirmed() public {
         vm.warp(t0 + 4 hours + 1);
         vault.expireTrigger(triggerId);
-        IVault.SignedResponse memory p1 = signedPriceAt("2070", t0 + 4 hours);
+        bytes[] memory p1 = signedPriceAt("2070", t0 + 4 hours);
 
         vm.expectRevert(abi.encodeWithSelector(IVault.TriggerNotOpen.selector, triggerId));
         vault.confirmTrigger(triggerId, p1);
@@ -106,7 +106,7 @@ contract StricterWindowBoundariesTest is UnitBase {
 
     function test_RevertWhen_P1IsOneSecondBeforeTheRulesMinimumWait() public {
         vm.warp(t0 + 45 minutes - 1);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.WaitNotOver.selector, t0 + 45 minutes));
         vault.confirmTrigger(triggerId, p1);
@@ -119,7 +119,7 @@ contract StricterWindowBoundariesTest is UnitBase {
 
     function test_RevertWhen_P1IsOneSecondAfterTheRulesMaximumWindow() public {
         vm.warp(t0 + 2 hours + 1);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.WindowClosed.selector, t0 + 2 hours));
         vault.confirmTrigger(triggerId, p1);

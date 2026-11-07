@@ -9,12 +9,11 @@ import { basescanAddress, buildStatus } from '../src/engine/status.ts';
 import { EventLog } from '../src/log.ts';
 
 const AGENT: Address = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
-const PAYER: Address = '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC';
 
 test('the status reports schedule, mode, wallets, budgets and totals as plain JSON', async () => {
   const clock = { ms: 1_793_400_000_000 };
   const log = new EventLog({ now: () => clock.ms });
-  const wallet = { ausd: 3_000_000n, eth: 10n ** 16n };
+  const wallet = { eth: 10n ** 16n };
   const budget = new Budget({
     settings: readBudgetSettings({}),
     log,
@@ -31,8 +30,8 @@ test('the status reports schedule, mode, wallets, budgets and totals as plain JS
       checkPending: async () => {},
       pollAccount: async () => {
         log.append({ kind: 'post.seen', account: 'demo', postId: '1', text: 'ETH', createdAt: 0 });
-        // The poll paid 0.01 aUSD
-        wallet.ausd -= 10_000n;
+        // The poll cost 0.001 USD
+        log.append({ kind: 'cost', costKind: 'post-fetch', source: 'getxapi', usd: 0.001, units: 1, users: [] });
         clock.ms += 1_500;
       },
     },
@@ -47,7 +46,8 @@ test('the status reports schedule, mode, wallets, budgets and totals as plain JS
     budget,
     sources: new SourceGuard({ log }),
     agent: AGENT,
-    payer: PAYER,
+    postSource: 'getxapi',
+    classifier: 'keywords',
     startedAt,
     restarts: 2,
     cycleIntervalSec: 30,
@@ -66,10 +66,10 @@ test('the status reports schedule, mode, wallets, budgets and totals as plain JS
   assert.equal(report.schedule.nextAt, startedAt + 30_000);
   assert.deepEqual(report.watchSet, ['demo']);
   assert.deepEqual(report.wallets.agent, { address: AGENT, link: basescanAddress(AGENT), eth: '0.01' });
-  assert.equal(report.wallets.payer?.ausd, '3');
-  assert.deepEqual(report.budget?.ausd, { tracked: true, spentToday: '0', limit: '3', min: '0.2' });
+  assert.deepEqual(report.data, { posts: 'getxapi', classifier: 'keywords', prices: 'Pyth (Hermes)' });
+  assert.deepEqual(report.budget?.data, { spentTodayUsd: '0.0000', limitUsd: '1.00' });
   assert.equal(report.totals.posts, 1);
-  assert.equal(report.totals.ausdSpent, '0.01');
+  assert.equal(report.totals.costUsd, '0.0010');
   assert.equal(report.totals.cycles, 1);
 });
 
@@ -84,7 +84,7 @@ test('without a budget or a payer the status still serializes, with nulls', asyn
   });
   const report = buildStatus({ cycles, agent: AGENT, startedAt: Date.now(), restarts: 0, cycleIntervalSec: 30, pollIntervalSec: 60 });
   assert.deepEqual(JSON.parse(JSON.stringify(report)), report);
-  assert.equal(report.wallets.payer, null);
+  assert.equal(report.data.posts, null);
   assert.equal(report.budget, null);
   assert.equal(report.schedule.lastCycle, null);
   assert.equal(report.schedule.lastCycleAgeSec, null);

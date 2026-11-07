@@ -18,7 +18,7 @@ contract RevertingDexTest is BehaviourBase {
     }
 
     function test_RevertWhen_TheDexRevertsOnABuy() public {
-        (uint256 triggerId, IVault.SignedResponse memory p1) = openAndWait();
+        (uint256 triggerId, bytes[] memory p1) = openAndWait();
         switchable.setDown(true, false);
         Books memory before = books();
         uint256 dexQuote = usdc.balanceOf(address(dex));
@@ -35,7 +35,7 @@ contract RevertingDexTest is BehaviourBase {
     }
 
     function test_ConfirmTrigger_RetriesWithTheSamePriceOnceTheDexIsBack() public {
-        (uint256 triggerId, IVault.SignedResponse memory p1) = openAndWait();
+        (uint256 triggerId, bytes[] memory p1) = openAndWait();
         switchable.setDown(true, false);
         vm.prank(keeper);
         vm.expectRevert(abi.encodeWithSelector(SwitchableDEX.DexDown.selector));
@@ -58,7 +58,7 @@ contract RevertingDexTest is BehaviourBase {
     }
 
     function test_ConfirmTrigger_RetriesWithALaterPriceOnceTheDexIsBack() public {
-        (uint256 triggerId, IVault.SignedResponse memory p1) = openAndWait();
+        (uint256 triggerId, bytes[] memory p1) = openAndWait();
         switchable.setDown(true, false);
         vm.prank(keeper);
         vm.expectRevert(abi.encodeWithSelector(SwitchableDEX.DexDown.selector));
@@ -67,7 +67,7 @@ contract RevertingDexTest is BehaviourBase {
         // The DEX is back 20 minutes later, still inside the 4 h window
         vm.warp(block.timestamp + 20 minutes);
         switchable.setDown(false, false);
-        IVault.SignedResponse memory laterP1 = signedPrice("2080");
+        bytes[] memory laterP1 = signedPrice("2080");
         vm.prank(keeper);
         uint256 positionId = vault.confirmTrigger(triggerId, laterP1);
 
@@ -79,7 +79,7 @@ contract RevertingDexTest is BehaviourBase {
 
     function test_RevertWhen_TheDexRevertsOnAManualSell() public {
         uint256 positionId = buyEth();
-        IVault.SignedResponse memory price = signedPrice("2100");
+        bytes[] memory price = signedPrice("2100");
         switchable.setDown(false, true);
         Books memory before = books();
 
@@ -94,7 +94,7 @@ contract RevertingDexTest is BehaviourBase {
 
     function test_Sell_RetriesOnceTheDexIsBack() public {
         uint256 positionId = buyEth();
-        IVault.SignedResponse memory price = signedPrice("2100");
+        bytes[] memory price = signedPrice("2100");
         switchable.setDown(false, true);
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(SwitchableDEX.DexDown.selector));
@@ -116,7 +116,7 @@ contract RevertingDexTest is BehaviourBase {
     function test_RevertWhen_TheDexRevertsOnATakeProfitSell() public {
         uint256 positionId = buyEth();
         // Entry 2070 + 8% = 2235.6
-        IVault.SignedResponse memory price = signedPrice("2240");
+        bytes[] memory price = signedPrice("2240");
         switchable.setDown(false, true);
         Books memory before = books();
 
@@ -142,7 +142,7 @@ contract RealDexRefusalTest is BehaviourBase {
         profile.token = address(unlisted);
         vault.setAssetProfile(ETH, profile);
         vm.warp(block.timestamp + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
         Books memory before = books();
 
         vm.prank(keeper);
@@ -162,7 +162,7 @@ contract RealDexRefusalTest is BehaviourBase {
         // At 1e20 USD per token, 50 USDC buys less than one unit of an 18-decimal token.
         uint256 triggerId = openEthTrigger("100000000000000000000");
         vm.warp(block.timestamp + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("103500000000000000000");
+        bytes[] memory p1 = signedPrice("103500000000000000000");
         Books memory before = books();
 
         vm.prank(keeper);

@@ -1,9 +1,35 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
-import { type Candidate, type Classification, type Classifier, type PostForClassification, sanitize } from './types.ts';
+import {
+  type Candidate,
+  type Classification,
+  type Classifier,
+  type ModelUsage,
+  type PostForClassification,
+  sanitize,
+} from './types.ts';
 
-export const DEFAULT_CLASSIFIER_MODEL = 'claude-opus-5-5';
+// The small model reads every post that passes the keyword filter; the large one only the posts it is unsure about.
+export const SMALL_CLASSIFIER_MODEL = 'claude-haiku-5-5';
+export const LARGE_CLASSIFIER_MODEL = 'claude-opus-5-5';
+export const DEFAULT_CLASSIFIER_MODEL = LARGE_CLASSIFIER_MODEL;
+
+// USD per million tokens (input, output), for the cost ledger. Thinking tokens bill as output.
+export const MODEL_PRICES: Record<string, { input: number; output: number }> = {
+  'claude-haiku-5-5': { input: 0.1, output: 0.5 },
+  'claude-sonnet-5-5': { input: 2, output: 10 },
+  'claude-opus-5-5': { input: 4, output: 20 },
+  'claude-fable-5-1': { input: 10, output: 50 },
+};
+
+export const usageCost = (model: string, inputTokens: number, outputTokens: number) => {
+  const price = MODEL_PRICES[model];
+  return price ? (inputTokens * price.input + outputTokens * price.output) / 1_000_000 : 0;
+};
+
+// Server-side fallbacks on a refusal: Haiku has none, and the parameter would be refused there
+const supportsFallbacks = (model: string) => !model.startsWith('claude-haiku');
 
 const ResultSchema = z.object({
   results: z.array(
@@ -19,9 +45,11 @@ const ResultSchema = z.object({
 type ParsedResult = z.infer<typeof ResultSchema>;
 
 // What the classifier needs from the SDK, so tests can pass a stand-in for the API.
-export type ParseMessage = (
-  params: Parameters<Anthropic['beta']['messages']['parse']>[0]
-) => Promise<{ stop_reason: string | null; parsed_output: ParsedResult | null }>;
+export type ParseMessage = (params: Parameters<Anthropic['beta']['messages']['parse']>[0]) => Promise<{
+  stop_reason: string | null;
+  parsed_output: ParsedResult | null;
+  usage?: { input_tokens: number; output_tokens: number };
+}>;
 
 export const SYSTEM_PROMPT = `You check posts for a rule-based trading vault. A user picked assets and topics; an agent watches public accounts; a smart contract buys only if signed market data later confirms a price trend. Your answer never moves money by itself: it only decides whether the contract is asked to check its rule.
 
@@ -65,24 +93,33 @@ export class ClaudeClassifier implements Classifier {
     }
   }
 
-  async classify(post: PostForClassification, candidates: Candidate[]): Promise<Classification[]> {
+  async classify(
+    post: PostForClassification,
+    candidates: Candidate[],
+    meter?: (usage: ModelUsage) => void
+  ): Promise<Classification[]> {
     if (candidates.length === 0) return [];
     let response: Awaited<ReturnType<ParseMessage>>;
     try {
       response = await this.parse({
         model: this.model,
-        max_tokens: 2048,
+        max_tokens: 4096,
         // Classification needs little deliberation; low effort keeps each post fast and cheap.
         output_config: { effort: 'low', format: betaZodOutputFormat(ResultSchema) },
         // If a safety classifier declines, the API re-runs the request on its recommended fallback model.
-        betas: ['server-side-fallback-2026-07-01'],
-        fallbacks: 'default',
+        ...(supportsFallbacks(this.model)
+          ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const }
+          : {}),
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: buildUserMessage(post, candidates) }],
       });
     } catch (error) {
       this.onError(error);
       throw error;
+    }
+    if (response.usage) {
+      const { input_tokens: inputTokens, output_tokens: outputTokens } = response.usage;
+      meter?.({ model: this.model, inputTokens, outputTokens, usd: usageCost(this.model, inputTokens, outputTokens) });
     }
     if (response.stop_reason === 'refusal') {
       this.onError(new Error('The model declined to classify the post'));
@@ -92,6 +129,6 @@ export class ClaudeClassifier implements Classifier {
       this.onError(new Error(`No parsed output (stop reason ${response.stop_reason})`));
       return [];
     }
-    return sanitize(response.parsed_output.results, candidates);
+    return sanitize(response.parsed_output.results, candidates).map((result) => ({ ...result, by: this.model }));
   }
 }

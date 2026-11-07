@@ -130,7 +130,7 @@ export const cycleTitle = (event) => {
     event.polled ? `Polled ${event.accountsPolled.map((handle) => `@${handle}`).join(' ')}` : 'No post poll',
     `${event.postsNew} new posts · ${event.triggersOpened} triggers opened · ${event.p1Checks} P1 checks`,
     `${event.bought} bought · ${event.rejected} rejected · ${event.expired} expired · ${event.sold} sold`,
-    `${event.paidCalls} paid calls · ${event.txSent} transactions · ${event.ausdSpent} aUSD · ${shortAmount(event.ethSpent, 8)} ETH`,
+    `${event.paidCalls} paid calls · ${event.txSent} transactions · $${shortAmount(event.costUsd, 4)} · ${shortAmount(event.ethSpent, 8)} ETH`,
     `${event.errors} errors`,
   ].join('\n');
 };
@@ -156,36 +156,30 @@ export const buildEngineRoom = (status, events, stripLength = 60) => {
   const cards = [
     {
       role: 'Agent wallet',
-      purpose: 'Pays the gas of its vault transactions',
+      purpose: 'Pays the gas and Pyth’s fees of its vault transactions',
       address: wallets.agent.address,
       short: shortAddress(wallets.agent.address),
       link: wallets.agent.link,
       balance: wallets.agent.eth === null ? '—' : `${shortAmount(wallets.agent.eth, 6)} ETH`,
     },
   ];
-  if (wallets.payer) {
-    cards.push({
-      role: 'Payer wallet',
-      purpose: 'Pays aUSD for signed data',
-      address: wallets.payer.address,
-      short: shortAddress(wallets.payer.address),
-      link: wallets.payer.link,
-      balance: wallets.payer.ausd === null ? '—' : `${shortAmount(wallets.payer.ausd)} aUSD`,
-    });
-  }
 
   const bar = (label, spent, limit, unit, digits) => {
     const pct = share(spent, limit);
+    const text =
+      unit === 'USD'
+        ? `$${shortAmount(spent, digits)} of $${shortAmount(limit, digits)} today`
+        : `${shortAmount(spent, digits)} of ${shortAmount(limit, digits)} ${unit} today`;
     return {
       label,
-      text: `${shortAmount(spent, digits)} of ${shortAmount(limit, digits)} ${unit} today`,
+      text,
       pct,
       tone: pct >= 100 ? 'red' : pct >= budget.savingAtPct ? 'amber' : 'ok',
     };
   };
   const budgets = budget
     ? [
-        ...(budget.ausd.tracked ? [bar('Data', budget.ausd.spentToday, budget.ausd.limit, 'aUSD', 4)] : []),
+        bar('Data', budget.data.spentTodayUsd, budget.data.limitUsd, 'USD', 4),
         bar('Gas', budget.eth.spentToday, budget.eth.limit, 'ETH', 6),
         {
           label: 'Transactions',
@@ -219,7 +213,7 @@ export const buildEngineRoom = (status, events, stripLength = 60) => {
       ['Triggers', totals.triggers],
       ['Buys', totals.buys],
       ['Sells', totals.sells],
-      ['aUSD', shortAmount(totals.ausdSpent)],
+      ['USD', shortAmount(totals.costUsd, 4)],
       ['ETH', shortAmount(totals.ethSpent, 6)],
       ['Errors recovered', totals.errors],
       ['Restarts', status.restarts],

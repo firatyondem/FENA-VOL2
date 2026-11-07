@@ -80,7 +80,7 @@ contract ProfileBoundariesTest is UnitBase {
         profile.minThresholdBps = 301;
         vault.setAssetProfile(ETH, profile);
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.RuleLooserThanProfile.selector, ETH));
         vault.confirmTrigger(triggerId, p1);
@@ -186,7 +186,7 @@ contract ProfileTighteningBoundariesTest is UnitBase {
     function expectLooserAtGateTwo(IVault.AssetProfile memory profile) private {
         vault.setAssetProfile(ETH, profile);
         vm.warp(t0 + 50 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2100");
+        bytes[] memory p1 = signedPrice("2100");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.RuleLooserThanProfile.selector, ETH));
         vault.confirmTrigger(triggerId, p1);
@@ -238,9 +238,9 @@ contract LowestProfileBoundariesTest is UnitBase {
         setUserEthRule(rule(), lowestRule());
         (uint256 triggerId, uint256 t0) = openEthTriggerNow("2000");
         vm.warp(t0 + 1);
-        IVault.SignedResponse memory p1 = signedPrice("2000.199999999999999999");
+        bytes[] memory p1 = signedPrice("2000.19999999");
 
-        vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 2000e18, 2000199999999999999999));
+        vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 2000e18, 2000199999990000000000));
         vault.confirmTrigger(triggerId, p1);
     }
 
@@ -248,7 +248,7 @@ contract LowestProfileBoundariesTest is UnitBase {
         setUserEthRule(rule(), lowestRule());
         (uint256 triggerId, uint256 t0) = openEthTriggerNow("2000");
         vm.warp(t0 + 1);
-        IVault.SignedResponse memory p1 = signedPrice("2000.000000000000000000");
+        bytes[] memory p1 = signedPrice("2000.000000000000000000");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 2000e18, 2000e18));
         vault.confirmTrigger(triggerId, p1);
@@ -258,7 +258,7 @@ contract LowestProfileBoundariesTest is UnitBase {
     function test_RevertWhen_P1IsTakenInTheSameSecondAsP0() public {
         setUserEthRule(rule(), lowestRule());
         (uint256 triggerId, uint256 t0) = openEthTriggerNow("2000");
-        IVault.SignedResponse memory p1 = signedPrice("2000.2");
+        bytes[] memory p1 = signedPrice("2000.2");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.WaitNotOver.selector, t0 + 1));
         vault.confirmTrigger(triggerId, p1);
