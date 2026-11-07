@@ -1,19 +1,18 @@
 // One explicit cycle: the agent's whole job, in a fixed order, on a fixed schedule. Gate 2 goes before Gate 1, because
-// open triggers are time-critical and already paid for; Gate 1 polls only the accounts an active rule watches, so no rule
-// means no paid call. A cycle never throws and never overlaps the next one, and each ends with one cycle.finished event.
-import { type Address, formatEther, formatUnits, isAddressEqual } from 'viem';
-import { AUSD_DECIMALS } from '../airnode/client.ts';
+// open triggers are time-critical and already paid for; Gate 1 polls only the accounts an active rule watches, each when
+// its own poll schedule says, so no rule means no paid call. A cycle never throws and never overlaps the next one, and
+// each ends with one cycle.finished event.
+import { type Address, formatEther, isAddressEqual } from 'viem';
 import type { Rule, VaultPort } from '../chain/vault.ts';
 import type { AgentEvent, EventLog, LoggedEvent } from '../log.ts';
-import type { WatchedAccount } from '../sources/twitter.ts';
+import type { WatchedAccount } from '../sources/posts.ts';
+import { type AccountActivity, isPollDue, type PollScheduleSettings } from './poll-schedule.ts';
 import { activeWatchSet, watchedAccountsIn } from './watch-set.ts';
 
 export type AgentMode = 'normal' | 'saving' | 'halted';
 
 export interface Balances {
-  // The payer's aUSD, with 6 decimals
-  ausd: bigint;
-  // The agent wallet's ETH, in wei
+  // The agent wallet's ETH, in wei: gas and Pyth's fees
   eth: bigint;
 }
 
@@ -25,7 +24,10 @@ export interface HealthPort {
 
 export interface CycleRunnerDeps {
   log: EventLog;
-  engine: { checkPending(): Promise<void>; pollAccount(account: WatchedAccount): Promise<void> };
+  engine: {
+    checkPending(): Promise<void>;
+    pollAccount(account: WatchedAccount): Promise<{ posts: number; lastPostAt?: number } | void>;
+  };
   keeper: { tick(): Promise<void> };
   vault: Pick<VaultPort, 'listRules'>;
   // The accounts the agent can read; Gate 1 polls the ones in the active watch set
@@ -37,7 +39,12 @@ export interface CycleRunnerDeps {
   // Without it every cycle runs in normal mode and spends nothing it can measure
   health?: HealthPort;
   cycleIntervalSec?: number;
+  // A fixed interval for every account, when no schedule is given
   pollIntervalSec?: number;
+  // Smart polling: each account by market hours and its own activity
+  schedule?: PollScheduleSettings;
+  // Each account's last poll and post when the agent starts, so a restart keeps the schedule
+  activityOf?: (handle: string) => AccountActivity;
 }
 
 export type CycleFinished = Extract<AgentEvent, { kind: 'cycle.finished' }>;
@@ -63,7 +70,7 @@ export const countCycleEvents = (events: readonly AgentEvent[]) => {
     rejected: count('trigger.rejected'),
     expired: count('trigger.expired'),
     sold: count('position.sold'),
-    paidCalls: count('payment.settled'),
+    paidCalls: events.filter((event) => event.kind === 'cost' && event.costKind !== 'gas' && event.costKind !== 'price-update-fee').length,
     txSent: events.filter(isAgentTransaction).length,
     errors: count('error'),
   };
@@ -76,9 +83,13 @@ const spentBetween = (before: bigint, after: bigint) => (before > after ? before
 
 export type CycleCounts = ReturnType<typeof countCycleEvents>;
 
+// USD that the cost events of a cycle add up to
+export const costUsd = (events: readonly AgentEvent[]) =>
+  events.reduce((sum, event) => (event.kind === 'cost' ? sum + event.usd : sum), 0);
+
 // What the cycles did since the agent started
 export interface CycleTotals extends CycleCounts {
-  ausdSpent: bigint;
+  costUsd: number;
   ethSpent: bigint;
 }
 
@@ -105,10 +116,11 @@ export class CycleRunner {
   private running: { cycle: number; startedAt: number } | undefined;
   private current: Promise<void> | undefined;
   private lastPollAt: number | undefined;
+  private readonly activity = new Map<string, AccountActivity>();
   private lastMode: AgentMode = 'normal';
   private lastCycle: CycleFinished | undefined;
   private lastWatchSet: string[] = [];
-  private readonly totals: CycleTotals = { ...countCycleEvents([]), ausdSpent: 0n, ethSpent: 0n };
+  private readonly totals: CycleTotals = { ...countCycleEvents([]), costUsd: 0, ethSpent: 0n };
   private nextAt: number | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
 
@@ -169,6 +181,15 @@ export class CycleRunner {
     };
   }
 
+  private activityFor(handle: string): AccountActivity {
+    let activity = this.activity.get(handle);
+    if (!activity) {
+      activity = this.deps.activityOf?.(handle) ?? {};
+      this.activity.set(handle, activity);
+    }
+    return activity;
+  }
+
   private namingAgent(rules: readonly Rule[]) {
     const { agent } = this.deps;
     return agent ? rules.filter((rule) => isAddressEqual(rule.agent, agent)) : rules;
@@ -204,15 +225,25 @@ export class CycleRunner {
       // 4. Keeper: take profit and stagnation exits
       await step('keeper', () => this.deps.keeper.tick());
 
-      // 5. Gate 1: paid post polls, only when due, only in normal mode, only for the active watch set
+      // 5. Gate 1: paid post polls, only when due, only in normal mode, only for the active watch set. Each account is
+      // polled once for every rule that watches it.
       const accountsPolled: string[] = [];
-      const pollDue = this.lastPollAt === undefined || startedAt - this.lastPollAt >= this.pollMs;
       const accounts = watchedAccountsIn(this.deps.watchlist, watchSet);
-      if (pollDue && mode === 'normal' && accounts.length > 0) {
-        this.lastPollAt = startedAt;
+      if (mode === 'normal' && accounts.length > 0) {
+        const { schedule } = this.deps;
+        const fixedDue = this.lastPollAt === undefined || startedAt - this.lastPollAt >= this.pollMs;
+        if (!schedule && fixedDue) this.lastPollAt = startedAt;
         for (const account of accounts) {
+          const activity = this.activityFor(account.handle);
+          if (schedule ? !isPollDue(schedule, startedAt, activity) : !fixedDue) continue;
           accountsPolled.push(account.handle);
-          await step('gate1', () => this.deps.engine.pollAccount(account));
+          const result = await step('gate1', () => this.deps.engine.pollAccount(account));
+          this.activity.set(account.handle, {
+            lastPollAt: startedAt,
+            ...((result && result.lastPostAt) || activity.lastPostAt
+              ? { lastPostAt: (result && result.lastPostAt) || activity.lastPostAt }
+              : {}),
+          });
         }
       }
 
@@ -221,7 +252,7 @@ export class CycleRunner {
       unsubscribe();
       const before = checked?.balances;
       const counts = countCycleEvents(appended);
-      const ausdSpent = before && after ? spentBetween(before.ausd, after.ausd) : 0n;
+      const spentUsd = costUsd(appended);
       const ethSpent = before && after ? spentBetween(before.eth, after.eth) : 0n;
       const finished = log.append({
         kind: 'cycle.finished',
@@ -232,14 +263,14 @@ export class CycleRunner {
         polled: accountsPolled.length > 0,
         accountsPolled,
         ...counts,
-        ausdSpent: formatUnits(ausdSpent, AUSD_DECIMALS),
+        costUsd: spentUsd.toFixed(6),
         ethSpent: formatEther(ethSpent),
         nextAt: this.nextAt ?? startedAt + this.cycleMs,
       });
       this.lastCycle = finished as CycleFinished;
       this.cyclesRun += 1;
       for (const key of Object.keys(counts) as (keyof CycleCounts)[]) this.totals[key] += counts[key];
-      this.totals.ausdSpent += ausdSpent;
+      this.totals.costUsd += spentUsd;
       this.totals.ethSpent += ethSpent;
     } catch (error) {
       // Only the summary itself can land here; the heartbeat must not stop over it

@@ -1,6 +1,6 @@
-// Talks to Person A's deployed Vault. Rules come from the chain: the users whose latest RuleSet names this agent's
-// wallet, with their topics from that event. Every write is simulated first, so a revert surfaces with the vault's
-// custom error name before any gas is spent.
+// Talks to the deployed Vault. Rules come from the chain: the users whose latest RuleSet names this agent's wallet, with
+// their topics from that event. Every write is simulated first, so a revert surfaces with the vault's custom error name
+// before any gas is spent. Each price-taking call pays Pyth's fee, which the vault reports through updateFee.
 import {
   type Account,
   type Address,
@@ -20,9 +20,9 @@ import {
   WaitForTransactionReceiptTimeoutError,
   type WalletClient,
 } from 'viem';
-import { deriveRequestHash, type SignedResponse } from '../airnode/attestation.ts';
 import type { Profiles } from '../profiles.ts';
-import { latestTweetRequest, type WatchedAccount } from '../sources/twitter.ts';
+import type { PriceUpdate } from '../pyth/hermes.ts';
+import { accountIdOf, type WatchedAccount } from '../sources/posts.ts';
 import { vaultAbi } from './vault-abi.ts';
 import {
   type Bought,
@@ -42,15 +42,11 @@ import {
 // The asset id the vault and the deploy script use: keccak256 of the asset's key, such as "OIL"
 export const assetIdOf = (key: string): Hex => keccak256(toHex(key));
 
-// IVault.SignedResponse: the vault checks the request hash against its own storage, then the signature over it
-export const toVaultResponse = ({ requestHash, timestamp, data, signature }: SignedResponse) => ({
-  requestHash,
-  timestamp: BigInt(timestamp),
-  data: toHex(data),
-  signature,
-});
+// IVault.SellReason: Manual, TakeProfit, Stagnation, StopLoss
+const SELL_REASONS: Record<SellKind, number> = { manual: 0, 'take-profit': 1, stagnation: 2, 'stop-loss': 3 };
 
-const SELL_REASONS: Partial<Record<SellKind, number>> = { manual: 0, 'take-profit': 1, stagnation: 2 };
+// A caller with a balance that only exists inside the eth_call, so a read-only check can pay Pyth's fee
+const CHECKER: Address = '0x00000000000000000000000000000000000C4ec7';
 
 // IVault.TriggerStatus: None, Open, Confirmed, Expired
 const TRIGGER_OPEN = 1;
@@ -69,17 +65,27 @@ export const revertReason = (error: unknown): string =>
   revertName(error) ??
   (error instanceof BaseError ? error.shortMessage : error instanceof Error ? error.message : String(error));
 
-// The vault's own checks on a price response. Anyone may ask and nothing moves, so this needs no wallet; a refusal comes
-// back as a VaultRejection, like a write's.
-export const checkPrice = async (publicClient: PublicClient, address: Address, asset: string, response: SignedResponse) => {
+// Pyth's fee for an update, as the vault will charge it
+export const updateFee = (publicClient: PublicClient, address: Address, update: PriceUpdate) =>
+  publicClient.readContract({ address, abi: vaultAbi, functionName: 'updateFee', args: [update.updates] });
+
+// The vault's own checks on a P1 or sell price. Anyone may ask and nothing moves: it runs as an eth_call from an address
+// that is given the fee for the call only, so it needs no wallet. A refusal comes back as a VaultRejection, like a
+// write's.
+export const checkPrice = async (publicClient: PublicClient, address: Address, asset: string, update: PriceUpdate) => {
   try {
-    const [price, priceTime] = await publicClient.readContract({
+    const fee = await updateFee(publicClient, address, update);
+    const { result } = await publicClient.simulateContract({
       address,
       abi: vaultAbi,
       functionName: 'checkPrice',
-      args: [assetIdOf(asset), toVaultResponse(response)],
+      args: [assetIdOf(asset), update.updates],
+      value: fee,
+      account: CHECKER,
+      stateOverride: [{ address: CHECKER, balance: fee + 10n ** 18n }],
     });
-    return { price, priceTime };
+    const [price, priceTime] = result;
+    return { price, priceTime, fee };
   } catch (error) {
     const name = revertName(error);
     if (name) throw new VaultRejection(name);
@@ -112,7 +118,7 @@ export interface ViemVaultOptions {
   publicClient: PublicClient;
   walletClient: WalletClient<Transport, Chain, Account>;
   profiles: Profiles;
-  // Accounts the agent can read, which name the vault's watched-account request hashes
+  // Accounts the agent can read; the vault knows them by keccak256 of the lower-case handle
   watchlist: WatchedAccount[];
   // The vault's deployment block, where the event scans start
   fromBlock?: bigint;
@@ -124,8 +130,8 @@ export interface ViemVaultOptions {
 
 export class ViemVault implements VaultPort {
   readonly kind = 'onchain';
-  // Only the owner sells by hand, so the agent's keeper takes profit and exits stagnation; the vault has no stop loss
-  readonly keeperSellKinds: readonly SellKind[] = ['take-profit', 'stagnation'];
+  // Only the owner sells by hand, so the agent's keeper takes profit, stops the loss and exits stagnation
+  readonly keeperSellKinds: readonly SellKind[] = ['take-profit', 'stop-loss', 'stagnation'];
   private readonly options: ViemVaultOptions;
   private readonly assetKeys: Map<string, string>;
   private readonly accountHandles: Map<string, WatchedAccount>;
@@ -139,9 +145,7 @@ export class ViemVault implements VaultPort {
   constructor(options: ViemVaultOptions) {
     this.options = options;
     this.assetKeys = new Map(Object.keys(options.profiles.assets).map((key) => [assetIdOf(key).toLowerCase(), key]));
-    this.accountHandles = new Map(
-      options.watchlist.map((account) => [deriveRequestHash(latestTweetRequest(account)).toLowerCase(), account])
-    );
+    this.accountHandles = new Map(options.watchlist.map((account) => [accountIdOf(account.handle).toLowerCase(), account]));
   }
 
   private get agent(): Address {
@@ -207,6 +211,7 @@ export class ViemVault implements VaultPort {
             takeProfitBps: assetRule.takeProfitBps,
             stagnationBandBps: assetRule.stagnationBandBps,
             stagnationAfterSec: assetRule.stagnationDelay,
+            stopLossBps: assetRule.stopLossBps,
           },
         ];
       });
@@ -291,6 +296,12 @@ export class ViemVault implements VaultPort {
     const position = await publicClient.readContract({ address, abi: vaultAbi, functionName: 'getPosition', args: [BigInt(id)] });
     const key = this.assetKey(position.assetId);
     if (!key || (users && !users.has(position.user.toLowerCase()))) return;
+    const exits = await publicClient.readContract({
+      address,
+      abi: vaultAbi,
+      functionName: 'getPositionExits',
+      args: [BigInt(id)],
+    });
     this.positions.set(id, {
       id,
       ruleId: position.user,
@@ -299,6 +310,12 @@ export class ViemVault implements VaultPort {
       entryPrice: position.entryPrice,
       entryTime: Number(position.openedAt),
       open: position.isOpen,
+      exits: {
+        takeProfitBps: exits.takeProfitBps,
+        stopLossBps: exits.stopLossBps,
+        stagnationBandBps: exits.stagnationBandBps,
+        stagnationAfterSec: exits.stagnationDelay,
+      },
     });
   }
 
@@ -321,17 +338,20 @@ export class ViemVault implements VaultPort {
 
   private async send(
     functionName: 'openTrigger' | 'confirmTrigger' | 'expireTrigger' | 'sell',
-    args: readonly unknown[]
-  ): Promise<{ hash: Hash; logs: Log[]; gasWei?: bigint }> {
+    args: readonly unknown[],
+    price?: PriceUpdate
+  ): Promise<{ hash: Hash; logs: Log[]; gasWei?: bigint; feeWei?: bigint }> {
     const { publicClient, walletClient, address } = this.options;
     try {
+      const fee = price ? await updateFee(publicClient, address, price) : 0n;
       const { request } = await publicClient.simulateContract({
         address,
         abi: vaultAbi,
         functionName,
         args: args as never,
         account: walletClient.account,
-      });
+        ...(price ? { value: fee } : {}),
+      } as never);
       // The request's ABI holds only this function; the whole ABI names a revert that first shows up at send time
       const hash = await walletClient.writeContract({ ...request, abi: vaultAbi } as never);
       const receipt = await this.waitForReceipt(hash);
@@ -340,6 +360,7 @@ export class ViemVault implements VaultPort {
       return {
         hash,
         logs: receipt.logs,
+        ...(price ? { feeWei: fee } : {}),
         ...(gasUsed !== undefined && effectiveGasPrice !== undefined ? { gasWei: gasUsed * effectiveGasPrice } : {}),
       };
     } catch (error) {
@@ -351,22 +372,30 @@ export class ViemVault implements VaultPort {
     }
   }
 
-  async openTrigger({ ruleId, asset, post, p0 }: OpenTriggerInput): Promise<OpenedTrigger> {
-    const { hash, logs, gasWei } = await this.send('openTrigger', [
-      ruleId,
-      assetIdOf(asset),
-      toVaultResponse(post),
-      toVaultResponse(p0),
-    ]);
-    return { triggerId: readEvent(logs, 'TriggerOpened').args.triggerId.toString(), txHash: hash, gasWei };
+  async openTrigger({ ruleId, asset, account, postId, p0 }: OpenTriggerInput): Promise<OpenedTrigger> {
+    const { hash, logs, gasWei, feeWei } = await this.send(
+      'openTrigger',
+      [ruleId, assetIdOf(asset), accountIdOf(account), BigInt(postId), p0.updates],
+      p0
+    );
+    return { triggerId: readEvent(logs, 'TriggerOpened').args.triggerId.toString(), txHash: hash, gasWei, feeWei };
   }
 
-  async confirmTrigger(triggerId: string, p1: SignedResponse): Promise<Bought> {
-    const { hash, logs, gasWei } = await this.send('confirmTrigger', [BigInt(triggerId), toVaultResponse(p1)]);
+  async confirmTrigger(triggerId: string, p1: PriceUpdate): Promise<Bought> {
+    const { hash, logs, gasWei, feeWei } = await this.send('confirmTrigger', [BigInt(triggerId), p1.updates], p1);
     const { args } = readEvent(logs, 'TriggerConfirmed');
     const positionId = args.positionId.toString();
     await this.loadPosition(positionId);
-    return { triggerId, positionId, usdcIn: args.quoteIn, assetOut: args.assetOut, price: args.p1, txHash: hash, gasWei };
+    return {
+      triggerId,
+      positionId,
+      usdcIn: args.quoteIn,
+      assetOut: args.assetOut,
+      price: args.p1,
+      txHash: hash,
+      gasWei,
+      feeWei,
+    };
   }
 
   async expireTrigger(triggerId: string): Promise<Expired> {
@@ -374,13 +403,11 @@ export class ViemVault implements VaultPort {
     return { txHash: hash, gasWei };
   }
 
-  async sell(positionId: string, kind: SellKind, price: SignedResponse): Promise<Sold> {
-    const reason = SELL_REASONS[kind];
-    if (reason === undefined) throw new VaultRejection('SellKindNotSupported', kind);
-    const { hash, logs, gasWei } = await this.send('sell', [BigInt(positionId), reason, toVaultResponse(price)]);
+  async sell(positionId: string, kind: SellKind, price: PriceUpdate): Promise<Sold> {
+    const { hash, logs, gasWei, feeWei } = await this.send('sell', [BigInt(positionId), SELL_REASONS[kind], price.updates], price);
     const { args } = readEvent(logs, 'PositionSold');
     const position = this.positions.get(positionId);
     if (position) position.open = false;
-    return { positionId, usdcOut: args.quoteOut, price: args.price, txHash: hash, gasWei };
+    return { positionId, usdcOut: args.quoteOut, price: args.price, txHash: hash, gasWei, feeWei };
   }
 }

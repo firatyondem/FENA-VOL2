@@ -19,7 +19,15 @@ export type AgentEvent =
     }
   | { kind: 'post.seen'; account: string; postId: string; text: string; createdAt: number }
   | { kind: 'post.skipped'; account: string; postId: string; reason: string }
-  | { kind: 'post.classified'; account: string; postId: string; classifier: string; results: Classification[] }
+  | {
+      kind: 'post.classified';
+      account: string;
+      postId: string;
+      classifier: string;
+      // relevant | not-relevant | skipped-by-filter
+      verdict?: string;
+      results: Classification[];
+    }
   | {
       kind: 'trigger.opened';
       triggerId: string;
@@ -61,7 +69,16 @@ export type AgentEvent =
       txHash?: string;
       gasEth?: string;
     }
-  | { kind: 'payment.settled'; transaction: string }
+  // A paid action, booked to the users it served (split evenly in the cost ledger)
+  | {
+      kind: 'cost';
+      costKind: 'post-fetch' | 'ai-call' | 'price-update-fee' | 'gas';
+      source: string;
+      usd: number;
+      units: number;
+      users: string[];
+      ref?: string;
+    }
   | { kind: 'tamper.result'; name: string; expected: string; actual: string; passed: boolean }
   | {
       kind: 'cycle.finished';
@@ -82,8 +99,9 @@ export type AgentEvent =
       sold: number;
       paidCalls: number;
       txSent: number;
-      // From the balances at the start and the end of the cycle; a payment can settle a block late
-      ausdSpent: string;
+      // USD of the cost events in the cycle: posts, model calls, and gas and fees priced at mainnet ETH
+      costUsd: string;
+      // From the agent wallet's balance at the start and the end of the cycle
       ethSpent: string;
       errors: number;
       nextAt: number;
@@ -98,9 +116,8 @@ export type AgentEvent =
       kind: 'budget.mode';
       mode: 'normal' | 'saving' | 'halted';
       reason: string;
-      ausdSpentToday: string;
+      dataUsdToday: string;
       ethSpentToday: string;
-      ausdBalance: string;
       ethBalance: string;
     }
   | { kind: 'error'; where: string; message: string };
@@ -125,7 +142,7 @@ const redactStrings = (value: unknown): unknown => {
 };
 
 // Every string of an event goes out redacted, error messages and rejection reasons above all. A post's own text is
-// left as it is: its links are the post's, and it comes from TwitterAPI.io, never from the agent's configuration.
+// left as it is: its links are the post's, and it comes from the post provider, never from the agent's configuration.
 const redactEvent = (event: AgentEvent): AgentEvent => {
   const redacted = redactStrings(event) as AgentEvent;
   return event.kind === 'post.seen' && redacted.kind === 'post.seen' ? { ...redacted, text: event.text } : redacted;

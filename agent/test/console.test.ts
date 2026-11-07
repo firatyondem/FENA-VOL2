@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
-import type { SignedResponse } from '../src/airnode/attestation.ts';
+import { openDb } from '../src/store/db.ts';
+import { DecisionLog } from '../src/store/decisions.ts';
+import { CostLedger } from '../src/store/ledger.ts';
 import { startConsoleServer } from '../src/console/server.ts';
 import { EventLog } from '../src/log.ts';
 // @ts-expect-error The view model is plain browser JavaScript without type declarations
@@ -24,7 +26,7 @@ const withServer = async (
 
 test('serves the page, its assets and the state', async () => {
   await withServer(async (base, log) => {
-    log.append({ kind: 'payment.settled', transaction: '0xabc' });
+    log.append({ kind: 'error', where: 'test', message: '0xabc' });
     const page = await fetch(`${base}/`);
     assert.equal(page.status, 200);
     assert.match(await page.text(), /The Wire Desk/);
@@ -69,125 +71,147 @@ test('reads its allowed origins from the options', async () => {
   }
 });
 
-test('serves one signed price per asset per window, and only for known assets', async () => {
-  const log = new EventLog({ now: () => 1_000 });
-  const fetched: string[] = [];
-  let fail = false;
-  const prices = {
-    assets: ['ETH', 'BTC'],
-    fetch: async (asset: string) => {
-      fetched.push(asset);
-      if (fail) throw new Error('payment failed');
-      return { airnode: '0x11F6e1661f92775Cd63763941E3c7C57750dE449', requestHash: '0x01', timestamp: String(fetched.length), data: '{"price":2070}', signature: '0x02' } as never;
-    },
-  };
-  const server = await startConsoleServer({ log, now: () => 0, port: 0, prices, priceCacheMs: 200 });
+const serve = async (options: Partial<Parameters<typeof startConsoleServer>[0]>) => {
+  const server = await startConsoleServer({ log: new EventLog({ now: () => 1_000 }), now: () => 0, port: 0, ...options });
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const get = (asset: string) => fetch(`${base}/api/signed-price?asset=${asset}`, { headers: { Origin: 'http://localhost:8000' } });
+  const close = async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  };
+  return { base, close };
+};
+const ORIGIN = { Origin: 'http://localhost:8000' };
+
+test('serves a Pyth update and its fee for the website’s manual sell, for known assets only', async () => {
+  const asked: string[] = [];
+  let fail = false;
+  const { base, close } = await serve({
+    prices: {
+      assets: ['ETH'],
+      latest: async (asset) => {
+        asked.push(asset);
+        if (fail) throw new Error('Hermes 401 at https://hermes.pyth.network/v2/updates?key=secret');
+        return { updates: ['0x504e4155'], prices: [] };
+      },
+      fee: async () => 30n,
+    },
+  });
   try {
-    const state = (await (await fetch(`${base}/api/state`)).json()) as { signedPrices: boolean };
-    assert.equal(state.signedPrices, true);
-
-    const [first, second] = await Promise.all([get('ETH'), get('ETH')]);
-    assert.equal(first.status, 200);
-    assert.equal(first.headers.get('access-control-allow-origin'), 'http://localhost:8000');
-    const body = (await first.json()) as { asset: string; response: { timestamp: string; data: string } };
-    assert.equal(body.asset, 'ETH');
-    assert.equal(body.response.data, '{"price":2070}');
-    assert.deepEqual(await second.json(), body, 'requests in the same window share one signed price');
-    assert.deepEqual(fetched, ['ETH'], 'one fetch for both requests');
-
-    assert.equal((await get('DOGE')).status, 400, 'an asset the agent does not price');
-    assert.equal((await get('')).status, 400);
-    assert.deepEqual(fetched, ['ETH'], 'unknown assets never reach the paid source');
-
+    const response = await fetch(`${base}/api/price-update?asset=ETH`, { headers: ORIGIN });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('access-control-allow-origin'), 'http://localhost:8000');
+    assert.deepEqual(await response.json(), { asset: 'ETH', updates: ['0x504e4155'], fee: '30', prices: [] });
+    assert.equal((await fetch(`${base}/api/price-update?asset=DOGE`)).status, 400);
+    assert.deepEqual(asked, ['ETH'], 'an unknown asset never reaches Hermes');
     fail = true;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const failed = await get('ETH');
+    const failed = await fetch(`${base}/api/price-update?asset=ETH`);
     assert.equal(failed.status, 502);
-    assert.match(((await failed.json()) as { error: string }).error, /payment failed/);
-    assert.equal((await get('ETH')).status, 502, 'a failure is not retried inside its window');
-    assert.deepEqual(fetched, ['ETH', 'ETH']);
-
-    fail = false;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    assert.equal((await get('ETH')).status, 200, 'a new window fetches again');
-    assert.deepEqual(fetched, ['ETH', 'ETH', 'ETH']);
+    const { error } = (await failed.json()) as { error: string };
+    assert.match(error, /Hermes 401/);
+    assert.doesNotMatch(error, /secret/, 'the URL is cut to its host');
   } finally {
-    server.closeAllConnections();
-    await new Promise((resolve) => server.close(resolve));
+    await close();
   }
 });
 
-test('without a price source the signed-price route says so', async () => {
+test('without a price source the price-update and tamper-set routes say so', async () => {
   await withServer(async (base) => {
-    const state = (await (await fetch(`${base}/api/state`)).json()) as { signedPrices: boolean };
-    assert.equal(state.signedPrices, false);
-    const response = await fetch(`${base}/api/signed-price?asset=ETH`);
-    assert.equal(response.status, 404);
-    assert.match(((await response.json()) as { error: string }).error, /no signed prices/);
+    const state = (await (await fetch(`${base}/api/state`)).json()) as { priceUpdates: boolean };
+    assert.equal(state.priceUpdates, false);
+    assert.equal((await fetch(`${base}/api/price-update?asset=ETH`)).status, 404);
+    assert.equal((await fetch(`${base}/api/tamper-set?asset=ETH`)).status, 404);
+    assert.equal((await fetch(`${base}/api/costs?user=*`)).status, 404);
+    assert.equal((await fetch(`${base}/api/decisions?user=*`)).status, 404);
   });
 });
 
-test('serves the tamper set from the cached prices, for its own assets only', async () => {
-  const log = new EventLog({ now: () => 1_000 });
-  const fetched: string[] = [];
-  let fail = false;
-  const prices = {
-    assets: ['ETH', 'BTC', 'OIL'],
-    fetch: async (asset: string) => {
-      fetched.push(asset);
-      if (fail) throw new Error('feed down');
-      return { requestHash: '0x01', timestamp: '1', data: `{"asset":"${asset}"}`, signature: '0x02' } as never;
+test('serves the tamper set for its own assets', async () => {
+  const { base, close } = await serve({
+    tamper: {
+      assets: ['ETH'],
+      build: async () => [{ name: 'Genuine', how: 'as it is', expected: 'accepted', update: ['0x01'] }],
     },
-  };
-  const tamper = {
-    assets: ['ETH'],
-    build: async (asset: string, priceOf: (asset: string) => Promise<SignedResponse>) => [
-      { name: 'Real', how: 'unchanged', expected: 'accepted', response: await priceOf(asset) },
-      { name: 'Other', how: 'another asset', expected: 'WrongRequestHash', response: await priceOf('BTC') },
-    ],
-  };
-  const server = await startConsoleServer({ log, now: () => 0, port: 0, prices, tamper, priceCacheMs: 10_000 });
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const get = (asset: string) => fetch(`${base}/api/tamper-set?asset=${asset}`, { headers: { Origin: 'http://localhost:8000' } });
+  });
   try {
-    const first = await get('ETH');
-    assert.equal(first.status, 200);
-    assert.equal(first.headers.get('access-control-allow-origin'), 'http://localhost:8000');
-    const body = (await first.json()) as { cases: { name: string; response: { data: string } }[] };
-    assert.deepEqual(body.cases.map((tamperCase) => tamperCase.name), ['Real', 'Other']);
-    assert.equal(body.cases[1]?.response.data, '{"asset":"BTC"}');
-
-    assert.equal((await get('ETH')).status, 200);
-    assert.equal((await fetch(`${base}/api/signed-price?asset=ETH`)).status, 200);
-    assert.deepEqual(fetched, ['ETH', 'BTC'], 'one fetch per asset for every route in the window');
-
-    assert.equal((await get('OIL')).status, 400, 'an asset without a tamper set');
-    assert.deepEqual(fetched, ['ETH', 'BTC']);
+    const body = (await (await fetch(`${base}/api/tamper-set?asset=ETH`)).json()) as { cases: { name: string }[] };
+    assert.deepEqual(body.cases.map((tamperCase) => tamperCase.name), ['Genuine']);
+    assert.equal((await fetch(`${base}/api/tamper-set?asset=OIL`)).status, 400);
   } finally {
-    server.closeAllConnections();
-    await new Promise((resolve) => server.close(resolve));
-  }
-
-  fail = true;
-  const failing = await startConsoleServer({ log, now: () => 0, port: 0, prices, tamper });
-  try {
-    const response = await fetch(`http://127.0.0.1:${(failing.address() as AddressInfo).port}/api/tamper-set?asset=ETH`);
-    assert.equal(response.status, 502);
-    assert.match(((await response.json()) as { error: string }).error, /feed down/);
-  } finally {
-    failing.closeAllConnections();
-    await new Promise((resolve) => failing.close(resolve));
+    await close();
   }
 });
 
-test('without a price source the tamper-set route says so', async () => {
-  await withServer(async (base) => {
-    const response = await fetch(`${base}/api/tamper-set?asset=ETH`);
-    assert.equal(response.status, 404);
-    assert.match(((await response.json()) as { error: string }).error, /no tamper set/);
+test('serves costs and decisions per user, and refuses a malformed user', async () => {
+  const db = openDb();
+  const user = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266';
+  const costs = new CostLedger(db, () => Date.UTC(2026, 10, 7, 12));
+  costs.record({ kind: 'post-fetch', source: 'getxapi', users: [user], units: 1, usd: 0.001 });
+  const decisions = new DecisionLog(db);
+  decisions.recordPost({ tweetId: '9', account: 'realDonaldTrump', text: 'Venezuela', createdAt: 1, users: [user] });
+  decisions.recordVerdict('9', 'relevant', 'OIL: Venezuela', 'claude-haiku-5-5');
+  const { base, close } = await serve({ costs, decisions });
+  try {
+    const report = (await (await fetch(`${base}/api/costs?user=${user}&days=2`)).json()) as {
+      days: { date: string; posts: number; totalUsd: number }[];
+    };
+    assert.deepEqual(
+      report.days.map(({ date, posts, totalUsd }) => [date, posts, totalUsd]),
+      [
+        ['2026-11-06', 0, 0],
+        ['2026-11-07', 1, 0.001],
+      ]
+    );
+    const body = (await (await fetch(`${base}/api/decisions?user=${user}&limit=5`)).json()) as {
+      decisions: { tweetId: string; verdict: string }[];
+    };
+    assert.deepEqual(body.decisions.map(({ tweetId, verdict }) => [tweetId, verdict]), [['9', 'relevant']]);
+    assert.equal((await fetch(`${base}/api/costs?user=bob`)).status, 400);
+    assert.equal((await fetch(`${base}/api/decisions`)).status, 400);
+  } finally {
+    await close();
+  }
+});
+
+test('health answers 200 while the agent runs and 503 when it stalls', async () => {
+  let ok = true;
+  const { base, close } = await serve({ health: () => ({ ok, lastPollAt: 5, version: '0.2.0' }) });
+  try {
+    const healthy = await fetch(`${base}/api/health`);
+    assert.equal(healthy.status, 200);
+    assert.deepEqual(await healthy.json(), { ok: true, lastPollAt: 5, version: '0.2.0' });
+    ok = false;
+    assert.equal((await fetch(`${base}/api/health`)).status, 503);
+  } finally {
+    await close();
+  }
+});
+
+test('the faucet takes a POST from the website, with a preflight, and passes on its refusals', async () => {
+  const drips: string[] = [];
+  const { base, close } = await serve({
+    faucet: {
+      drip: async (address) => {
+        drips.push(address);
+        if (drips.length > 1) throw Object.assign(new Error('This address got its demo funds today'), { status: 429 });
+        return { address, ethTx: '0xe', usdcTx: '0xu', eth: 5n, usdc: 7n };
+      },
+    },
   });
+  try {
+    const preflight = await fetch(`${base}/api/demo/faucet`, { method: 'OPTIONS', headers: ORIGIN });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get('access-control-allow-methods'), 'POST');
+    const post = (body: string) =>
+      fetch(`${base}/api/demo/faucet`, { method: 'POST', headers: { ...ORIGIN, 'Content-Type': 'application/json' }, body });
+    const first = await post('{"address":"0xabc"}');
+    assert.equal(first.status, 200);
+    assert.deepEqual(await first.json(), { address: '0xabc', ethTx: '0xe', usdcTx: '0xu', eth: '5', usdc: '7' });
+    assert.equal((await post('{"address":"0xabc"}')).status, 429);
+    assert.equal((await post('not json')).status, 400);
+    assert.equal((await fetch(`${base}/api/demo/faucet`)).status, 405);
+  } finally {
+    await close();
+  }
 });
 
 test('refuses writes and unknown paths', async () => {
@@ -200,12 +224,12 @@ test('refuses writes and unknown paths', async () => {
 
 test('streams missed events, new events and the clock', async () => {
   await withServer(async (base, log) => {
-    log.append({ kind: 'payment.settled', transaction: '0x1' });
-    log.append({ kind: 'payment.settled', transaction: '0x2' });
+    log.append({ kind: 'error', where: 'test', message: '0x1' });
+    log.append({ kind: 'error', where: 'test', message: '0x2' });
     const controller = new AbortController();
     const response = await fetch(`${base}/api/stream?since=1`, { signal: controller.signal });
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-    log.append({ kind: 'payment.settled', transaction: '0x3' });
+    log.append({ kind: 'error', where: 'test', message: '0x3' });
     let text = '';
     while (!(text.includes('0x3') && text.includes('event: clock'))) {
       const { value, done } = await reader.read();
@@ -324,7 +348,7 @@ test('/api/state and each clock tick carry the live status; the replay sends non
 
 test('/api/state sends at most the newest 1,000 events', async () => {
   await withServer(async (base, log) => {
-    for (let index = 0; index < 1_005; index += 1) log.append({ kind: 'payment.settled', transaction: `0x${index}` });
+    for (let index = 0; index < 1_005; index += 1) log.append({ kind: 'error', where: 'test', message: `0x${index}` });
     const state = (await (await fetch(`${base}/api/state`)).json()) as { events: { seq: number }[] };
     assert.equal(state.events.length, 1_000);
     assert.equal(state.events[0]?.seq, 6);
@@ -338,7 +362,7 @@ const liveStatus = (overrides: Record<string, unknown> = {}) => ({
   uptimeSec: 100,
   restarts: 1,
   mode: 'saving',
-  modeReason: 'aUSD budget at 80% or more (2.4 aUSD of 3 aUSD)',
+  modeReason: 'data budget at 80% or more ($0.8000 of $1.0000)',
   schedule: {
     cycleIntervalSec: 30,
     pollIntervalSec: 60,
@@ -357,14 +381,10 @@ const liveStatus = (overrides: Record<string, unknown> = {}) => ({
       link: 'https://sepolia.basescan.org/address/0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
       eth: '0.0123456789',
     },
-    payer: {
-      address: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
-      link: 'https://sepolia.basescan.org/address/0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
-      ausd: '0.6',
-    } as Record<string, string> | null,
   },
+  data: { posts: 'getxapi', classifier: 'claude-haiku-5-5 → claude-opus-5-5', prices: 'Pyth (Hermes)' },
   budget: {
-    ausd: { tracked: true, spentToday: '2.4', limit: '3', min: '0.2' },
+    data: { spentTodayUsd: '0.8000', limitUsd: '1.00' },
     eth: { spentToday: '0.0001', limit: '0.005', min: '0.0005' },
     txLastHour: 3,
     maxTxPerHour: 30,
@@ -383,7 +403,7 @@ const liveStatus = (overrides: Record<string, unknown> = {}) => ({
     paidCalls: 4,
     txSent: 2,
     errors: 1,
-    ausdSpent: '0.04',
+    costUsd: '0.0400',
     ethSpent: '0.000123',
   },
   sources: {},
@@ -408,24 +428,21 @@ const cycle = (fields: Record<string, unknown>) => ({
   sold: 0,
   paidCalls: 0,
   txSent: 0,
-  ausdSpent: '0',
+  costUsd: '0',
   ethSpent: '0',
   errors: 0,
   nextAt: 0,
   ...fields,
 });
 
-test('the Engine Room shows the heartbeat, the mode, both wallets, the budgets and the totals', () => {
+test('the Engine Room shows the heartbeat, the mode, the wallet, the budgets and the totals', () => {
   const room = buildEngineRoom(liveStatus(), []);
   assert.deepEqual(room.heartbeat, { text: 'Last cycle 12 s ago', stale: false });
-  assert.deepEqual(room.mode, { mode: 'saving', reason: 'aUSD budget at 80% or more (2.4 aUSD of 3 aUSD)' });
+  assert.deepEqual(room.mode, { mode: 'saving', reason: 'data budget at 80% or more ($0.8000 of $1.0000)' });
   assert.match(room.schedule, /^One cycle every 30 s · posts polled every 60 s · watching @demo · next cycle \d\d:\d\d:\d\d UTC$/);
   assert.deepEqual(
     room.wallets.map((wallet: { role: string; short: string; balance: string }) => [wallet.role, wallet.short, wallet.balance]),
-    [
-      ['Agent wallet', '0x7099…79C8', '0.012345 ETH'],
-      ['Payer wallet', '0x3C44…93BC', '0.6 aUSD'],
-    ]
+    [['Agent wallet', '0x7099…79C8', '0.012345 ETH']]
   );
   assert.deepEqual(
     room.budgets.map((budget: { label: string; text: string; pct: number; tone: string }) => [
@@ -435,7 +452,7 @@ test('the Engine Room shows the heartbeat, the mode, both wallets, the budgets a
       budget.tone,
     ]),
     [
-      ['Data', '2.4 of 3 aUSD today', 80, 'amber'],
+      ['Data', '$0.8 of $1 today', 80, 'amber'],
       ['Gas', '0.0001 of 0.005 ETH today', 2, 'ok'],
       ['Transactions', '3 of 30 in the last hour', 10, 'ok'],
     ]
@@ -446,7 +463,7 @@ test('the Engine Room shows the heartbeat, the mode, both wallets, the budgets a
     ['Triggers', 1],
     ['Buys', 1],
     ['Sells', 0],
-    ['aUSD', '0.04'],
+    ['USD', '0.04'],
     ['ETH', '0.000123'],
     ['Errors recovered', 1],
     ['Restarts', 1],
@@ -460,23 +477,6 @@ test('the heartbeat turns red after three missed cycles', () => {
   assert.deepEqual(buildEngineRoom(late, []).heartbeat, { text: 'Last cycle 91 s ago', stale: true });
   const never = liveStatus({ uptimeSec: 120, schedule: { ...liveStatus().schedule, lastCycleAgeSec: null } });
   assert.deepEqual(buildEngineRoom(never, []).heartbeat, { text: 'No cycle yet', stale: true });
-});
-
-test('without a payer the data budget and the aUSD card are left out', () => {
-  const status = liveStatus();
-  const freeData = liveStatus({
-    wallets: { ...status.wallets, payer: null },
-    budget: { ...status.budget, ausd: { ...status.budget.ausd, tracked: false } },
-  });
-  const room = buildEngineRoom(freeData, []);
-  assert.deepEqual(
-    room.wallets.map((wallet: { role: string }) => wallet.role),
-    ['Agent wallet']
-  );
-  assert.deepEqual(
-    room.budgets.map((budget: { label: string }) => budget.label),
-    ['Gas', 'Transactions']
-  );
 });
 
 test('the cycle strip colours the last 60 cycles by what they did', () => {

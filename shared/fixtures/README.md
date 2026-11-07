@@ -1,35 +1,24 @@
-# Signed fixtures
+# Fixtures
 
-Owner: Person B. Read-only for everyone else; regenerate with `cd agent && npm run fixtures`.
+## Pyth price updates (`pyth/`)
 
-## Real responses (root of this folder)
+Real, signed Pyth updates, saved in the shape Hermes serves them (`binary.data` is what the vault takes, `parsed` is
+read from those bytes). Hermes needs an API key since 26 August 2026, so `npm run pyth-fixtures` in `agent/` takes them
+from Base Sepolia instead: each one is the exact accumulator update that someone else's transaction sent to the chain's
+Pyth contract, which verified it there. `source` names the transaction.
 
-Fetched from the Nodary Airnode v2 (`0xE70f1e8b22a21e4Bb5188918a3033341b281E4c0`) with the projections in
-`shared/asset-profiles.json`. Their signatures are genuine.
+| File | ETH/USD | Published | Use |
+| --- | --- | --- | --- |
+| `eth-p0.json` | 2236.50466218 | 1794057378 | P0: Pyth's previous price came a second earlier |
+| `eth-p1.json` | 2244.64595033 | 1794059218 | P1, 30 min 40 s later: +0.36% |
+| `eth-later.json` | 2242.62750143 | 1794063774 | A price 0.09% under the buy: a stop-loss at 5 bps sells |
 
-| File | Use |
-| --- | --- |
-| `nodary-eth-usd.json` | A real ETH/USD price. Older than 5 minutes by the time you read it: the real "stale response". |
-| `nodary-btc-usd.json` | A real price for a second asset: the real "different request" case against the ETH request. |
-| `nodary-doge-usd.json` | A real small price (`0.075845`), to test decimal reading. |
+Each update also carries BTC/USD and one more feed, so it is a wrong-asset update for any other asset.
+`contracts/test/fork/PythFork.t.sol` runs a real buy, a real stop-loss and the tamper test with them against the live
+Pyth contract on a fork of Base Sepolia.
 
-## Synthetic responses (`synthetic/`)
+## Synthetic cases
 
-The TwitterAPI.io and TickerLayer operations cost aUSD, and real prices rarely move 3% in five minutes, so these are
-signed the way an Airnode signs, by a **public test-only key**. In vault tests, expect
-`manifest.fixtureAirnode.address` as the Airnode for tweets and prices. The request hashes are the real ones.
-
-`synthetic/manifest.json` lists every request hash, the demo rules the cases are built for, the time anchors, and the
-expected outcome of each file:
-
-- Tweets: `tweet-trump-venezuela` (accept), `tweet-musk-doge` (accept, non-ASCII), `tweet-trump-old` (P0 too long after
-  the post)
-- ETH P0/P1: `eth-p0`, then `eth-p1-rise` (accept), `-flat` (below threshold), `-spike` (above cap), `-early`, `-late`
-- Oil P0/P1: `oil-p0`, `oil-p1-rise` (accept)
-- The four tamper tests from the spec: `tamper-edited-value`, `tamper-stale`, `tamper-different-request`,
-  `tamper-wrong-signer`
-
-Tweet ids are real-format Snowflakes, so `(id >> 22) + 1288834974657` is the post's creation time in milliseconds,
-which the vault can compute instead of parsing X's `createdAt` string.
-
-Submit `data` as its exact UTF-8 bytes (`toHex(response.data)`), never re-serialized.
+The vault's unit and flow tests build their posts and prices in Solidity (`contracts/test/utils/SyntheticFixtures.sol`,
+with the times and prices of the hackathon's signed fixtures) on `LocalPyth`, which takes unsigned updates. The agent's
+replay and tests script their price paths the same way (`ScriptedPriceSource`).

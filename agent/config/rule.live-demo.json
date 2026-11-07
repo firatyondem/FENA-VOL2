@@ -16,6 +16,7 @@
       "takeProfitBps": 800,
       "stagnationBandBps": 100,
       "stagnationAfterSec": 600,
+      "stopLossBps": 500,
       "topics": ["Ethereum", "ETH", "crypto reserve", "SEC", "crypto rules", "stablecoin law", "Fed", "interest rates"]
     }
   ]

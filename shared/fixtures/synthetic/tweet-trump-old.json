@@ -1,7 +1,0 @@
-{
-  "airnode": "0x11F6e1661f92775Cd63763941E3c7C57750dE449",
-  "requestHash": "0x16938739f5e7da8ef7e5206122520a478f21b385ddbb499eab0b52e0e59aeb2c",
-  "timestamp": "1793380860",
-  "data": "{\"author\":\"realDonaldTrump\",\"createdAt\":\"Wed Oct 28 17:20:00 +0000 2026\",\"id\":\"2115493797688246275\",\"text\":\"Iran sanctions are coming. Watch!\"}",
-  "signature": "0x3429fb63423ac325815a4b5a4b27c3b0d861278ba5e595f65eaad78c0367981a72c4bdc19a3cc4b113d4993d395f87ddd13b738c617df0139c43b339f303b9491b"
-}

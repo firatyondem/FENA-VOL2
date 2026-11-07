@@ -1,7 +1,7 @@
 // The accounts worth a paid poll: those that at least one unpaused rule naming this agent watches for one of its assets.
 // No rule, no paid call.
 import type { Rule } from '../chain/vault.ts';
-import type { WatchedAccount } from '../sources/twitter.ts';
+import type { WatchedAccount } from '../sources/posts.ts';
 
 // Handles, sorted. A rule's accounts map each handle to the rule's assets linked to it; an empty list buys nothing.
 export const activeWatchSet = (rules: readonly Rule[]): string[] => {

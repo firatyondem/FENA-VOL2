@@ -1,7 +1,6 @@
 // What the Engine Room shows: the agent's schedule, mode, budgets, wallets and totals, as plain JSON (no bigints), so the
 // console can render it and the frontend can read it from /api/state.
-import { type Address, formatEther, formatUnits } from 'viem';
-import { AUSD_DECIMALS } from '../airnode/client.ts';
+import { type Address, formatEther } from 'viem';
 import type { Budget } from './budget.ts';
 import type { CycleRunner } from './cycle.ts';
 import type { SourceGuard } from './sources.ts';
@@ -11,9 +10,11 @@ export const basescanAddress = (address: Address) => `https://sepolia.basescan.o
 export interface StatusDeps {
   cycles: Pick<CycleRunner, 'status'>;
   budget?: Pick<Budget, 'status'>;
-  sources?: Pick<SourceGuard, 'status'>;
   agent: Address;
-  payer?: Address;
+  // The post provider and the classifier, for the Engine Room
+  sources?: Pick<SourceGuard, 'status'>;
+  postSource?: string;
+  classifier?: string;
   // Milliseconds since the epoch
   startedAt: number;
   restarts: number;
@@ -22,14 +23,13 @@ export interface StatusDeps {
   nowMs?: () => number;
 }
 
-const ausd = (value: bigint) => formatUnits(value, AUSD_DECIMALS);
-
 export const buildStatus = ({
   cycles,
   budget,
   sources,
   agent,
-  payer,
+  postSource,
+  classifier,
   startedAt,
   restarts,
   cycleIntervalSec,
@@ -63,17 +63,13 @@ export const buildStatus = ({
     watchSet: cycle.watchSet,
     wallets: {
       agent: { address: agent, link: basescanAddress(agent), eth: money?.balances ? formatEther(money.balances.eth) : null },
-      payer: payer
-        ? { address: payer, link: basescanAddress(payer), ausd: money?.balances ? ausd(money.balances.ausd) : null }
-        : null,
     },
+    data: { posts: postSource ?? null, classifier: classifier ?? null, prices: 'Pyth (Hermes)' },
     budget: money
       ? {
-          ausd: {
-            tracked: money.trackAusd,
-            spentToday: ausd(money.ausdSpentToday),
-            limit: ausd(money.settings.ausdPerDay),
-            min: ausd(money.settings.minAusd),
+          data: {
+            spentTodayUsd: money.dataUsdToday.toFixed(4),
+            limitUsd: money.settings.dataUsdPerDay.toFixed(2),
           },
           eth: {
             spentToday: formatEther(money.ethSpentToday),
@@ -98,7 +94,7 @@ export const buildStatus = ({
       paidCalls: totals.paidCalls,
       txSent: totals.txSent,
       errors: totals.errors,
-      ausdSpent: ausd(totals.ausdSpent),
+      costUsd: totals.costUsd.toFixed(4),
       ethSpent: formatEther(totals.ethSpent),
     },
     sources: sources?.status() ?? {},

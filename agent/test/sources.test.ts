@@ -2,14 +2,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Classifier } from '../src/classifier/types.ts';
 import {
-  airnodeSourceOf,
   guardedClassifier,
   guardedFetch,
+  hostSourceOf,
   SourceBackoff,
   SourceGuard,
 } from '../src/engine/sources.ts';
 import { EventLog } from '../src/log.ts';
-import { loadProfiles } from '../src/profiles.ts';
 
 const CYCLE_MS = 30_000;
 
@@ -19,12 +18,12 @@ const setup = () => {
   const guard = new SourceGuard({ log, nowMs: () => clock.ms, cycleIntervalSec: 30 });
   let calls = 0;
   const fail = () =>
-    guard.call('nodary', async () => {
+    guard.call('hermes', async () => {
       calls += 1;
       throw new Error('503');
     });
   const succeed = () =>
-    guard.call('nodary', async () => {
+    guard.call('hermes', async () => {
       calls += 1;
       return 'price';
     });
@@ -50,17 +49,17 @@ test('three failures in a row skip the source for 2 cycles, without calling it',
   await assert.rejects(fail());
   const degraded = log.recent()[0];
   assert.deepEqual(degraded?.kind === 'source.degraded' && [degraded.source, degraded.failures, degraded.retryAt], [
-    'nodary',
+    'hermes',
     3,
     clock.ms + 2 * CYCLE_MS,
   ]);
-  await assert.rejects(succeed(), (error: unknown) => error instanceof SourceBackoff && error.source === 'nodary');
+  await assert.rejects(succeed(), (error: unknown) => error instanceof SourceBackoff && error.source === 'hermes');
   assert.equal(calls(), 3, 'a skipped call never reaches the source');
   clock.ms += 2 * CYCLE_MS - 1;
   await assert.rejects(succeed(), SourceBackoff);
   clock.ms += 1;
   assert.equal(await succeed(), 'price');
-  assert.equal(guard.status().nodary?.degraded, false);
+  assert.equal(guard.status().hermes?.degraded, false);
 });
 
 test('each failed retry doubles the skip: 2, 4, 8 cycles, at most 10 minutes', async () => {
@@ -87,40 +86,41 @@ test('a success after degrading logs source.recovered and starts the count over'
   // Two new failures are no outage again
   await assert.rejects(fail());
   await assert.rejects(fail());
-  assert.equal(guard.status().nodary?.degraded, false);
+  assert.equal(guard.status().hermes?.degraded, false);
 });
 
 test('sources back off independently', async () => {
   const { guard, fail } = setup();
   for (let index = 0; index < 3; index += 1) await assert.rejects(fail());
-  assert.equal(await guard.call('twitterapi', async () => 'post'), 'post');
-  await assert.rejects(guard.call('nodary', async () => 'price'), SourceBackoff);
+  assert.equal(await guard.call('posts', async () => 'post'), 'post');
+  await assert.rejects(guard.call('hermes', async () => 'price'), SourceBackoff);
 });
 
-test('the fetch guard counts network errors, 5xx and 429 per Airnode, but not 400 or 402', async () => {
+test('the fetch guard counts network errors, 5xx and 429 per source, but not 400 or 402', async () => {
   const { guard, log } = setup();
-  const profiles = loadProfiles();
   const statuses: number[] = [];
   const inner: typeof fetch = async (input) => {
     const status = statuses.shift() ?? 200;
     if (status === 0) throw new TypeError(`fetch failed: ${String(input)}`);
     return new Response('{}', { status });
   };
-  const fetchWithGuard = guardedFetch(inner, guard, airnodeSourceOf(profiles.airnodes));
-  const twitter = profiles.airnodes.twitterapi?.url as string;
-  const nodary = profiles.airnodes.nodary?.url as string;
+  const posts = 'https://api.getxapi.com/';
+  const hermes = 'https://hermes.pyth.network/';
+  const fetchWithGuard = guardedFetch(inner, guard, hostSourceOf({ posts, hermes }));
+  const twitter = `${posts}twitter/tweet/advanced_search`;
+  const nodary = `${hermes}v2/updates/price/latest`;
 
   statuses.push(400, 402, 400);
   for (let index = 0; index < 3; index += 1) await fetchWithGuard(twitter);
-  assert.equal(guard.status().twitterapi?.failures, 0, 'an answer is not an outage');
+  assert.equal(guard.status().posts?.failures, 0, 'an answer is not an outage');
 
   statuses.push(503, 429, 0);
   await fetchWithGuard(twitter);
   await fetchWithGuard(twitter);
   await assert.rejects(fetchWithGuard(twitter), TypeError);
-  assert.equal(guard.status().twitterapi?.degraded, true);
+  assert.equal(guard.status().posts?.degraded, true);
   await assert.rejects(fetchWithGuard(twitter), SourceBackoff);
-  assert.equal((await fetchWithGuard(nodary)).status, 200, 'Nodary is fine');
+  assert.equal((await fetchWithGuard(nodary)).status, 200, 'Hermes is fine');
   // A URL of no known source passes untouched
   statuses.push(503, 503, 503, 503);
   for (let index = 0; index < 4; index += 1) await fetchWithGuard('https://example.org/');

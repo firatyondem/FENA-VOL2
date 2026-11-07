@@ -1,68 +1,48 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { AttestationError, type SignedResponse, verifySignedResponse } from '../src/airnode/attestation.ts';
-import { loadProfiles } from '../src/profiles.ts';
-import { buildRequestHashes } from '../scripts/request-hashes.ts';
-import { buildJudgeSet, buildTamperSet, fetchJudgeSet } from '../scripts/tamper-set.ts';
-import { NODARY_ADDRESS, readFixture, readSharedJson } from './helpers.ts';
+import { buildTamperSet } from '../scripts/tamper-set.ts';
+import { getAsset } from '../src/profiles.ts';
+import { findPrice } from '../src/pyth/accumulator.ts';
+import { type PriceUpdate, readHermesResponse } from '../src/pyth/hermes.ts';
+import type { PriceSource } from '../src/pyth/price-source.ts';
+import { profiles, readPythFixture, scriptedPrices, T } from './helpers.ts';
 
-const profiles = loadProfiles();
-const eth = readFixture('nodary-eth-usd.json');
-const btc = readFixture('nodary-btc-usd.json');
+const ETH_FEED = getAsset(profiles, 'ETH').pyth.priceId;
+const P1_TIME = 1794059218;
 
-test('the request hashes match the real Nodary responses and the fixture manifest', () => {
-  const watchlist = readSharedJson<{ handle: string; label: string; assets: string[]; pinned: boolean }[]>(
-    '../agent/config/watchlist.json'
-  );
-  const hashes = buildRequestHashes(profiles, watchlist);
-  assert.equal(hashes.prices.ETH?.requestHash, eth.requestHash);
-  assert.equal(hashes.prices.BTC?.requestHash, btc.requestHash);
-  assert.equal(hashes.prices.ETH?.airnode, NODARY_ADDRESS);
-  const manifest = readSharedJson<{ requests: Record<string, { requestHash: string }> }>('fixtures/synthetic/manifest.json');
-  assert.equal(hashes.posts.realDonaldTrump?.requestHash, manifest.requests['tweet:realDonaldTrump']?.requestHash);
-  assert.equal(hashes.posts.elonmusk?.airnode, '0x7B02Fd3324D2dC362f65a9c01e59EC5fDb4E1CCB');
-});
+// Real signed updates: the latest ETH price is eth-p1, an hour earlier is eth-p0, and BTC comes from a scripted feed
+const realPrices = (): PriceSource => {
+  const btc = scriptedPrices({ now: T }, { BTC: [[0, '77000']] });
+  return {
+    latest: async (asset: string): Promise<PriceUpdate> =>
+      asset === 'ETH' ? readHermesResponse(readPythFixture('eth-p1')) : btc.updateAt('BTC', T),
+    firstAt: async () => readHermesResponse(readPythFixture('eth-p0')),
+  };
+};
 
-test('the live tamper set fails the checks the spec names, on real Nodary data', async () => {
-  const cases = await buildTamperSet(eth, btc, eth);
-  const reasons = await Promise.all(
-    cases.map(async ({ name, response }: { name: string; response: SignedResponse }) => {
-      try {
-        await verifySignedResponse(response, NODARY_ADDRESS, eth.requestHash);
-        return [name, 'verified'];
-      } catch (error) {
-        return [name, error instanceof AttestationError ? error.reason : 'other'];
-      }
-    })
-  );
-  assert.deepEqual(reasons, [
-    ['Edited value', 'wrong-signer'],
-    // A stale response still has a valid signature; the vault refuses it on age
-    ['Stale response', 'verified'],
-    ['Different request', 'wrong-request'],
-    ['Wrong signer', 'wrong-signer'],
-  ]);
-  assert.match(cases[0]?.response.data ?? '', /"price":4489.39/);
-});
-
-test('the judges start from the real response, unchanged, and then get its four forgeries', async () => {
-  const cases = await buildJudgeSet(eth, btc, eth);
+test('the tamper set holds a genuine price and the three forgeries checkPrice can name', async () => {
+  const cases = await buildTamperSet(profiles, realPrices(), 'ETH', P1_TIME + 10);
   assert.deepEqual(
     cases.map(({ name, expected }) => [name, expected]),
     [
-      ['Real, fresh response', 'accepted'],
-      ['Edited value', 'NotSignedByAirnode'],
-      ['Stale response', 'ResponseTooOld'],
-      ['Different request', 'WrongRequestHash'],
-      ['Wrong signer', 'NotSignedByAirnode'],
+      ['Genuine', 'accepted'],
+      ['Edited price', 'InvalidPriceUpdate'],
+      ['Old price', 'PriceTooOld'],
+      ['Wrong asset', 'WrongPriceFeed'],
     ]
   );
-  assert.equal(cases[0]?.response, eth);
-  const fetched: string[] = [];
-  const set = await fetchJudgeSet(async (asset) => {
-    fetched.push(asset);
-    return asset === 'ETH' ? eth : btc;
-  });
-  assert.deepEqual(fetched, ['ETH', 'BTC']);
-  assert.equal(set.length, 5);
+  const [genuine, edited, old, wrong] = cases;
+  assert.equal(findPrice(genuine?.update ?? [], ETH_FEED)?.publishTime, P1_TIME);
+
+  // One byte of the ETH price changed, nothing else
+  const a = Buffer.from((genuine?.update[0] ?? '0x').slice(2), 'hex');
+  const b = Buffer.from((edited?.update[0] ?? '0x').slice(2), 'hex');
+  assert.equal(a.length, b.length);
+  assert.equal([...a].filter((byte, index) => byte !== b[index]).length, 1);
+  assert.notEqual(findPrice(edited?.update ?? [], ETH_FEED)?.price, findPrice(genuine?.update ?? [], ETH_FEED)?.price);
+
+  // Older than the vault's five minutes
+  assert.ok(P1_TIME + 10 - (findPrice(old?.update ?? [], ETH_FEED)?.publishTime ?? 0) > profiles.maxPriceAgeSec);
+  // No ETH price at all
+  assert.equal(findPrice(wrong?.update ?? [], ETH_FEED), undefined);
 });

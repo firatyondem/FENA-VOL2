@@ -1,15 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { SignedResponse } from '../src/airnode/attestation.ts';
-import { changeBps, checkTrend, checkTweetToP0, risesAbove, risesAtLeast } from '../src/engine/gates.ts';
-import type { SignedPrice } from '../src/profiles.ts';
+import { changeBps, checkPostAge, checkTrend, checkTweetToP0, risesAbove, risesAtLeast } from '../src/engine/gates.ts';
+import type { PricePoint } from '../src/profiles.ts';
 
-const at = (price: bigint, sourceTime: number): SignedPrice => ({
-  asset: 'ETH',
+const at = (price: bigint, sourceTime: number, prevPublishTime?: number): PricePoint & { prevPublishTime?: number } => ({
   price,
   sourceTime,
-  signedAt: sourceTime,
-  response: {} as SignedResponse,
+  ...(prevPublishTime === undefined ? {} : { prevPublishTime }),
 });
 
 const rule = { trendThresholdBps: 300, spikeCapBps: 1200, minWaitSec: 120, maxWindowSec: 600 };
@@ -55,4 +52,18 @@ test('compares in integers without rounding', () => {
   assert.ok(!risesAbove(100n, 105n, 500));
   assert.equal(changeBps(2000n, 2070n), 350);
   assert.equal(changeBps(2000n, 1900n), -500);
+});
+
+test('P0 must be the first Pyth price after the post', () => {
+  // The previous price came before the post: the first one after it
+  assert.deepEqual(checkTweetToP0(1_000, at(1n, 1_002, 999), 600), { ok: true });
+  // Another price came between the post and P0
+  assert.deepEqual(checkTweetToP0(1_000, at(1n, 1_002, 1_001), 600), { ok: false, reason: 'p0-not-first' });
+  assert.deepEqual(checkTweetToP0(1_000, at(1n, 1_000, 1_000), 600), { ok: false, reason: 'p0-not-first' });
+});
+
+test('a post is taken while it is at most the maximum age old, and never from the future', () => {
+  assert.deepEqual(checkPostAge(1_000, 2_800, 1_800), { ok: true });
+  assert.deepEqual(checkPostAge(1_000, 2_801, 1_800), { ok: false, reason: 'post-too-old' });
+  assert.deepEqual(checkPostAge(1_001, 1_000, 1_800), { ok: false, reason: 'post-too-old' });
 });

@@ -1,7 +1,0 @@
-{
-  "airnode": "0x11F6e1661f92775Cd63763941E3c7C57750dE449",
-  "requestHash": "0x146de0b997fcc576022d636162f9bbeba8aeb9dfc29ea52940f58626c00b4ada",
-  "timestamp": "1793381221",
-  "data": "{\"price\":71.4,\"updatedAt\":1793381220000}",
-  "signature": "0xde232c0adf8fe2379a863b635da17965e1d1d3cf3dd2ee57f64687707387cf5d338689dca098b8b2a1ea2edda4d9b0438ff3de558099a5bcbe0a9a492fe62c1b1b"
-}

@@ -5,7 +5,7 @@ import { type Address, createPublicClient, createWalletClient, type Hex, http, i
 import { privateKeyToAccount } from 'viem/accounts';
 import { baseSepolia, foundry } from 'viem/chains';
 import { applyRule, type RuleConfig } from '../src/chain/setup.ts';
-import type { WatchedAccount } from '../src/sources/twitter.ts';
+import type { WatchedAccount } from '../src/sources/posts.ts';
 
 const readJson = <T>(url: URL): T => JSON.parse(readFileSync(url, 'utf8')) as T;
 const { RPC_URL, USER_PRIVATE_KEY, AGENT_PRIVATE_KEY, AGENT_ADDRESS, RULE_FILE } = process.env;

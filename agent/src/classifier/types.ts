@@ -7,6 +7,16 @@ export interface Classification {
   relevant: boolean;
   confidence: number;
   reason: string;
+  // Who answered: the keyword filter, the verdict cache or a model's name
+  by?: string;
+}
+
+// One model call, for the cost ledger
+export interface ModelUsage {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  usd: number;
 }
 
 // An asset the post may be checked against: one of the account's assets that the user's rule also allows.
@@ -19,12 +29,15 @@ export interface Candidate {
 export interface PostForClassification {
   author: string;
   text: string;
+  // The post's ID, which keys the verdict cache
+  id?: string;
 }
 
 export interface Classifier {
   readonly name: string;
-  // Returns one result per candidate at most; never an asset outside `candidates`.
-  classify(post: PostForClassification, candidates: Candidate[]): Promise<Classification[]>;
+  // Returns one result per candidate at most; never an asset outside `candidates`. `meter` hears of every paid model
+  // call.
+  classify(post: PostForClassification, candidates: Candidate[], meter?: (usage: ModelUsage) => void): Promise<Classification[]>;
 }
 
 export type SkipReason = 'repost' | 'empty' | 'no-candidates';

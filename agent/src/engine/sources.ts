@@ -1,10 +1,10 @@
-// Backs off a data source that keeps failing, so a down Airnode or RPC is not hammered (or paid) every cycle: after 3
+// Backs off a data source that keeps failing, so a down provider or RPC is not hammered (or paid) every cycle: after 3
 // failures in a row the source is skipped for 2 cycles, then 4, 8 and so on, at most 10 minutes, until a call to it
 // succeeds again. A skipped call fails fast with SourceBackoff, which the engine treats like any passing failure.
 import type { Classifier } from '../classifier/types.ts';
 import type { EventLog } from '../log.ts';
 
-export const SOURCES = ['twitterapi', 'nodary', 'tickerlayer', 'rpc', 'classifier'] as const;
+export const SOURCES = ['posts', 'hermes', 'rpc', 'classifier'] as const;
 export type SourceName = (typeof SOURCES)[number];
 
 export class SourceBackoff extends Error {
@@ -116,10 +116,10 @@ export const guardedFetch =
     return source ? guard.call(source, () => inner(input, init), isOutage) : inner(input, init);
   };
 
-// The Airnode a URL belongs to, by the URLs in shared/asset-profiles.json
-export const airnodeSourceOf = (airnodes: Record<string, { url: string }>) => (url: string) => {
-  const match = Object.entries(airnodes).find(([, airnode]) => url.startsWith(airnode.url));
-  return match && (SOURCES as readonly string[]).includes(match[0]) ? (match[0] as SourceName) : undefined;
+// The source a URL belongs to, by the base URLs of the post provider and Hermes
+export const hostSourceOf = (bases: Partial<Record<SourceName, string>>) => (url: string) => {
+  const match = Object.entries(bases).find(([, base]) => base && url.startsWith(base));
+  return match ? (match[0] as SourceName) : undefined;
 };
 
 // The classifier behind the guard: an API error counts as a failure; a model that declines still answers

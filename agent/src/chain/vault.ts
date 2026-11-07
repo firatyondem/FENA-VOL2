@@ -1,8 +1,8 @@
-// The agent's view of the vault. The vault decides; the agent only brings it signed proof. Everything the agent needs
-// from Person A's IVault goes through this one interface: the in-memory SimVault for tests and the stage replay, and
-// ViemVault for the deployed contract.
+// The agent's view of the vault. The vault decides; the agent only brings it Pyth prices. Everything the agent needs from
+// IVault goes through this one interface: the in-memory SimVault for tests and the stage replay, and ViemVault for the
+// deployed contract.
 import { type Address, formatEther, type Hex } from 'viem';
-import type { SignedResponse } from '../airnode/attestation.ts';
+import type { PriceUpdate } from '../pyth/hermes.ts';
 
 // IVault.AssetRule, in seconds and basis points, for one asset of a rule
 export interface RuleAsset {
@@ -20,8 +20,8 @@ export interface RuleAsset {
   stagnationBandBps: number;
   // 0 turns the stagnation exit off
   stagnationAfterSec: number;
-  // Stop loss is a stretch goal that the deployed vault does not have; only the SimVault applies it. 0 turns it off.
-  stopLossBps?: number;
+  // Anyone may sell at P <= entry * (1 - stop loss). 0 turns it off.
+  stopLossBps: number;
 }
 
 // IVault.Rule plus what the agent needs to navigate: the rule belongs to one user, keyed by their address.
@@ -45,15 +45,18 @@ export interface Rule {
 export interface OpenTriggerInput {
   ruleId: string;
   asset: string;
+  // The post's account handle and ID; the vault reads the post's time from the ID
   account: string;
-  post: SignedResponse;
-  p0: SignedResponse;
+  postId: string;
+  // The first Pyth price published at or after the post
+  p0: PriceUpdate;
 }
 
-// What a mined transaction cost the agent wallet: gasUsed * effectiveGasPrice, in wei
+// What a mined transaction cost the agent wallet: gasUsed * effectiveGasPrice, in wei, and Pyth's fee
 export interface TransactionCost {
   txHash?: Hex;
   gasWei?: bigint;
+  feeWei?: bigint;
 }
 
 export interface OpenedTrigger extends TransactionCost {
@@ -88,15 +91,24 @@ export interface OpenTriggerRecord {
 
 export type SellKind = 'manual' | 'take-profit' | 'stagnation' | 'stop-loss';
 
+// The sell rules a position was bought with; a later change of the rule does not change them (IVault.PositionExits)
+export interface PositionExits {
+  takeProfitBps: number;
+  stopLossBps: number;
+  stagnationBandBps: number;
+  stagnationAfterSec: number;
+}
+
 export interface Position {
   id: string;
   ruleId: string;
   asset: string;
   amount: bigint;
   entryPrice: bigint;
-  // When the vault bought, in seconds; a sell needs a price taken after it
+  // When the vault bought, in seconds; a sell needs a price published after it
   entryTime: number;
   open: boolean;
+  exits: PositionExits;
 }
 
 export interface Sold extends TransactionCost {
@@ -130,14 +142,15 @@ export class TxTimeout extends Error {
 
 export interface VaultPort {
   readonly kind: 'simulated' | 'onchain';
-  // The sells the keeper may submit: the vault lets anyone take profit or exit stagnation, only the owner sell by hand
+  // The sells the keeper may submit: anyone may take profit, stop the loss or exit stagnation; only the owner sells by
+  // hand
   readonly keeperSellKinds: readonly SellKind[];
   listRules(): Promise<Rule[]>;
   openTrigger(input: OpenTriggerInput): Promise<OpenedTrigger>;
-  confirmTrigger(triggerId: string, p1: SignedResponse): Promise<Bought>;
+  confirmTrigger(triggerId: string, p1: PriceUpdate): Promise<Bought>;
   expireTrigger(triggerId: string): Promise<Expired | void>;
   listPositions(): Promise<Position[]>;
   // The open triggers of this agent's users, so a restart forgets none
   listOpenTriggers?(): Promise<OpenTriggerRecord[]>;
-  sell(positionId: string, kind: SellKind, price: SignedResponse): Promise<Sold>;
+  sell(positionId: string, kind: SellKind, price: PriceUpdate): Promise<Sold>;
 }

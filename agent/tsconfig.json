@@ -10,7 +10,19 @@
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "viem": [
+        "./node_modules/viem/_types/index.d.ts"
+      ]
+    }
   },
-  "include": ["src", "scripts", "test"]
+  "include": [
+    "src",
+    "scripts",
+    "test",
+    "../shared/pyth"
+  ]
 }

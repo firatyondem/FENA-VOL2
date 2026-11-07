@@ -48,8 +48,8 @@ test('the report adds up the run: window, uptime, restarts, cycles and totals', 
   assert.equal(report.restarts, 1);
   assert.equal(report.cyclesRun, 5);
   assert.equal(report.cyclesSkipped, 1);
-  const { ausd, eth, ...counts } = report.totals;
-  assert.equal(ausd, 30_000n);
+  const { usd, eth, ...counts } = report.totals;
+  assert.equal(usd.toFixed(4), '0.0300');
   assert.equal(eth, 15_000_000_000_000n);
   assert.deepEqual(counts, {
     cycles: 5,
@@ -101,8 +101,8 @@ test('the markdown links each transaction to basescan and keeps the settings', (
   assert.match(markdown, /- Uptime: 1 h 54 min, restarts: 1/);
   assert.ok(markdown.includes(`(${txLink(`0x${'aa'.repeat(32)}`)})`));
   assert.ok(markdown.includes('https://sepolia.basescan.org/tx/0xdddddddd'));
-  assert.match(markdown, /\| 2026-10-31T12:00 \| 3 \| 1 \| 1 \| 1 \| 0 \| TrendTooWeak ×1 \| 0 \| 0 \| 0.01 \| 0 \| 1 \|/);
-  assert.match(markdown, /\*\*saving\*\*: aUSD budget at 80% or more/);
+  assert.match(markdown, /\| 2026-10-31T12:00 \| 3 \| 1 \| 1 \| 1 \| 0 \| TrendTooWeak ×1 \| 0 \| 0 \| \$0.0100 \| 0 \| 1 \|/);
+  assert.match(markdown, /\*\*saving\*\*: data budget at 80% or more/);
   assert.match(markdown, /- rpcHost: base-sepolia.g.alchemy.com/);
   assert.match(markdown, /restart recovered 1 open trigger\(s\) \(#1\)/);
 });
@@ -111,7 +111,7 @@ test('the summary fits a terminal, and an empty window says so', () => {
   const summary = renderSummary(buildReport(selectRun(events, { nowMs: NOW })));
   assert.deepEqual(summary.split('\n').length, 5);
   assert.match(summary, /^Run 2026-10-31 12:00:00 UTC → 2026-10-31 13:59:59 UTC: up 1 h 54 min, 1 restart\(s\)/);
-  assert.match(summary, /4 agent transactions, 2 data payments; spent 0.03 aUSD and 0.000015 ETH/);
+  assert.match(summary, /4 agent transactions, 2 data payments; spent \$0.0300 and 0.000015 ETH/);
   const empty = buildReport(selectRun(events, { nowMs: NOW + 86_400_000, sinceMs: parseDuration('1h') }));
   assert.equal(renderSummary(empty), 'No live run in the log for this window.');
   assert.match(renderMarkdown(empty), /No live run in the log for this window/);

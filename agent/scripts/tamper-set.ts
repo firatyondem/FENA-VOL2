@@ -1,57 +1,62 @@
-// The spec's four tamper tests, built from real signed Nodary responses so the deployed vault faces genuine data:
-// an edited value, a stale response, a valid response for another asset, and data signed with our own key.
-import { readFileSync } from 'node:fs';
-import type { SignedResponse } from '../src/airnode/attestation.ts';
-import { signResponse } from '../src/airnode/sign.ts';
+// The tamper test's cases for an asset, all built from real Pyth updates: a fresh one that the vault accepts, the same one
+// with the asset's price edited, an hour-old one, and another asset's. The website's judges page and `npm run
+// tamper-demo` send each to the vault's checkPrice, which names its reason for every refusal. A replayed price is refused
+// per user once it opened or confirmed a trigger, so checkPrice cannot show it; the fork test and the local stage do.
+import { bytesToHex, type Hex, hexToBytes } from 'viem';
 import type { TamperCase } from '../src/console/server.ts';
-import { ATTACKER_KEY } from './fixture-set.ts';
+import { getAsset, type Profiles } from '../src/profiles.ts';
+import type { PriceSource } from '../src/pyth/price-source.ts';
 
 export type { TamperCase };
 
-// A genuine Nodary signature from long ago, past the vault's age limit
-export const readStaleEth = () =>
-  JSON.parse(readFileSync(new URL('../../shared/fixtures/nodary-eth-usd.json', import.meta.url), 'utf8')) as SignedResponse;
+// The update with the last byte of `feedId`'s price changed, as an attacker would nudge it
+export const editPrice = (updates: readonly Hex[], feedId: Hex): Hex[] => {
+  const needle = hexToBytes(feedId);
+  return updates.map((update) => {
+    const bytes = hexToBytes(update);
+    for (let i = 0; i + 32 <= bytes.length; i++) {
+      if (needle.every((byte, k) => bytes[i + k] === byte)) {
+        // The int64 price follows the 32-byte feed ID; its last byte is at +39
+        bytes[i + 39] = ((bytes[i + 39] as number) ^ 0x01) & 0xff;
+        return bytesToHex(bytes);
+      }
+    }
+    return update;
+  });
+};
 
 export const buildTamperSet = async (
-  freshEth: SignedResponse,
-  freshBtc: SignedResponse,
-  staleEth: SignedResponse
-): Promise<TamperCase[]> => [
-  {
-    name: 'Edited value',
-    how: 'Raised the price in a real signed ETH/USD response',
-    expected: 'NotSignedByAirnode',
-    response: { ...freshEth, data: freshEth.data.replace(/"price":([\d.]+)/, (_, price) => `"price":${Number(price) * 2}`) },
-  },
-  {
-    name: 'Stale response',
-    how: 'Submitted an old real ETH/USD response',
-    expected: 'ResponseTooOld',
-    response: staleEth,
-  },
-  {
-    name: 'Different request',
-    how: 'Submitted a valid BTC/USD response where ETH/USD is expected',
-    expected: 'WrongRequestHash',
-    response: freshBtc,
-  },
-  {
-    name: 'Wrong signer',
-    how: 'Signed real ETH/USD data with our own key',
-    expected: 'NotSignedByAirnode',
-    response: await signResponse(ATTACKER_KEY, freshEth.requestHash, Number(freshEth.timestamp), freshEth.data),
-  },
-];
-
-// The judges' sequence: first the real response, which the vault must accept, then the four forgeries of it
-export const buildJudgeSet = async (
-  freshEth: SignedResponse,
-  freshBtc: SignedResponse,
-  staleEth: SignedResponse
-): Promise<TamperCase[]> => [
-  { name: 'Real, fresh response', how: 'A fresh signed ETH/USD response, unchanged', expected: 'accepted', response: freshEth },
-  ...(await buildTamperSet(freshEth, freshBtc, staleEth)),
-];
-
-export const fetchJudgeSet = async (fetchPrice: (asset: string) => Promise<SignedResponse>) =>
-  buildJudgeSet(await fetchPrice('ETH'), await fetchPrice('BTC'), readStaleEth());
+  profiles: Profiles,
+  prices: PriceSource,
+  asset: string,
+  nowSec: number,
+  otherAsset = asset === 'BTC' ? 'ETH' : 'BTC'
+): Promise<TamperCase[]> => {
+  const feed = getAsset(profiles, asset).pyth.priceId;
+  const [fresh, old, other] = await Promise.all([
+    prices.latest(asset),
+    prices.firstAt(asset, nowSec - 3600),
+    prices.latest(otherAsset),
+  ]);
+  return [
+    { name: 'Genuine', how: `A fresh ${asset} price from Pyth, as it is`, expected: 'accepted', update: fresh.updates },
+    {
+      name: 'Edited price',
+      how: `The same update with the last byte of the ${asset} price changed`,
+      expected: 'InvalidPriceUpdate',
+      update: editPrice(fresh.updates, feed),
+    },
+    {
+      name: 'Old price',
+      how: `A genuine ${asset} update from an hour ago, past the five-minute limit`,
+      expected: 'PriceTooOld',
+      update: old.updates,
+    },
+    {
+      name: 'Wrong asset',
+      how: `A genuine ${otherAsset} update offered as ${asset}`,
+      expected: 'WrongPriceFeed',
+      update: other.updates,
+    },
+  ];
+};
