@@ -30,7 +30,7 @@ contract AdminTokenChangeTest is BehaviourBase {
 
         swapEthToken();
         vm.warp(block.timestamp + 10 minutes);
-        IVault.SignedResponse memory price = signedPrice("2100");
+        bytes[] memory price = signedPrice("2100");
         vm.prank(user);
         uint256 quoteOut = vault.sell(positionId, IVault.SellReason.Manual, price);
 
@@ -55,7 +55,7 @@ contract AdminTokenChangeTest is BehaviourBase {
 
         // Each position sells its own token.
         vm.warp(block.timestamp + 10 minutes);
-        IVault.SignedResponse memory price = signedPrice("2100");
+        bytes[] memory price = signedPrice("2100");
         vm.startPrank(user);
         vault.sell(firstPosition, IVault.SellReason.Manual, price);
         assertEq(teth.balanceOf(address(vault)), 0, "the first sell took the tETH");

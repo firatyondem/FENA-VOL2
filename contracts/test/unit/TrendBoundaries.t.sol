@@ -26,9 +26,9 @@ contract TrendBoundariesTest is UnitBase {
     }
 
     function test_RevertWhen_P1IsOneWeiBelowTheThreshold() public {
-        IVault.SignedResponse memory p1 = signedPrice("2059.999999999999999999");
+        bytes[] memory p1 = signedPrice("2059.99999999");
 
-        vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 2000e18, 2059999999999999999999));
+        vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 2000e18, 2059999999990000000000));
         vault.confirmTrigger(triggerId, p1);
     }
 
@@ -40,22 +40,22 @@ contract TrendBoundariesTest is UnitBase {
     }
 
     function test_RevertWhen_P1IsOneWeiAboveTheSpikeCap() public {
-        IVault.SignedResponse memory p1 = signedPrice("2240.000000000000000001");
+        bytes[] memory p1 = signedPrice("2240.00000001");
 
-        vm.expectRevert(abi.encodeWithSelector(IVault.SpikeTooHigh.selector, 2000e18, 2240000000000000000001));
+        vm.expectRevert(abi.encodeWithSelector(IVault.SpikeTooHigh.selector, 2000e18, 2240000000010000000000));
         vault.confirmTrigger(triggerId, p1);
     }
 
     function test_RevertWhen_P1EqualsP0() public {
-        IVault.SignedResponse memory p1 = signedPrice("2000.000000000000000000");
+        bytes[] memory p1 = signedPrice("2000.000000000000000000");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 2000e18, 2000e18));
         vault.confirmTrigger(triggerId, p1);
     }
 
     function test_AFailedP1LeavesTheTriggerOpenAndTheBalanceUntouched() public {
-        IVault.SignedResponse memory p1 = signedPrice("2059.999999999999999999");
-        vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 2000e18, 2059999999999999999999));
+        bytes[] memory p1 = signedPrice("2059.99999999");
+        vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 2000e18, 2059999999990000000000));
         vault.confirmTrigger(triggerId, p1);
 
         assertStatus(triggerId, IVault.TriggerStatus.Open);
@@ -74,34 +74,34 @@ contract TrendRoundingBoundariesTest is UnitBase {
         super.setUp();
         uint256 t0;
         // P0 = 2000e18 + 1 wei: threshold = 2060000000000000000001.03 wei, cap = 2240000000000000000001.12 wei
-        (triggerId, t0) = openEthTriggerNow("2000.000000000000000001");
+        (triggerId, t0) = openEthTriggerNow("2000.00000001");
         vm.warp(t0 + 31 minutes);
     }
 
     function test_ConfirmTrigger_BuysAtTheThresholdRoundedUp() public {
-        vault.confirmTrigger(triggerId, signedPrice("2060.000000000000000002"));
+        vault.confirmTrigger(triggerId, signedPrice("2060.00000002"));
         assertStatus(triggerId, IVault.TriggerStatus.Confirmed);
     }
 
     function test_RevertWhen_P1IsTheThresholdRoundedDown() public {
-        IVault.SignedResponse memory p1 = signedPrice("2060.000000000000000001");
+        bytes[] memory p1 = signedPrice("2060.00000001");
 
         vm.expectRevert(
-            abi.encodeWithSelector(IVault.TrendTooWeak.selector, 2000000000000000000001, 2060000000000000000001)
+            abi.encodeWithSelector(IVault.TrendTooWeak.selector, 2000000000010000000000, 2060000000010000000000)
         );
         vault.confirmTrigger(triggerId, p1);
     }
 
     function test_ConfirmTrigger_BuysAtTheSpikeCapRoundedDown() public {
-        vault.confirmTrigger(triggerId, signedPrice("2240.000000000000000001"));
+        vault.confirmTrigger(triggerId, signedPrice("2240.00000001"));
         assertStatus(triggerId, IVault.TriggerStatus.Confirmed);
     }
 
     function test_RevertWhen_P1IsTheSpikeCapRoundedUp() public {
-        IVault.SignedResponse memory p1 = signedPrice("2240.000000000000000002");
+        bytes[] memory p1 = signedPrice("2240.00000002");
 
         vm.expectRevert(
-            abi.encodeWithSelector(IVault.SpikeTooHigh.selector, 2000000000000000000001, 2240000000000000000002)
+            abi.encodeWithSelector(IVault.SpikeTooHigh.selector, 2000000000010000000000, 2240000000020000000000)
         );
         vault.confirmTrigger(triggerId, p1);
     }
@@ -130,9 +130,9 @@ contract StricterTrendBoundariesTest is UnitBase {
 
     function test_RevertWhen_P1IsOneWeiBelowTheRulesThreshold() public {
         // Above the profile's 3%, but below the rule's 4.5%
-        IVault.SignedResponse memory p1 = signedPrice("2089.999999999999999999");
+        bytes[] memory p1 = signedPrice("2089.99999999");
 
-        vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 2000e18, 2089999999999999999999));
+        vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 2000e18, 2089999999990000000000));
         vault.confirmTrigger(triggerId, p1);
     }
 
@@ -143,9 +143,9 @@ contract StricterTrendBoundariesTest is UnitBase {
 
     function test_RevertWhen_P1IsOneWeiAboveTheRulesSpikeCap() public {
         // Below the profile's 12%, but above the rule's 10%
-        IVault.SignedResponse memory p1 = signedPrice("2200.000000000000000001");
+        bytes[] memory p1 = signedPrice("2200.00000001");
 
-        vm.expectRevert(abi.encodeWithSelector(IVault.SpikeTooHigh.selector, 2000e18, 2200000000000000000001));
+        vm.expectRevert(abi.encodeWithSelector(IVault.SpikeTooHigh.selector, 2000e18, 2200000000010000000000));
         vault.confirmTrigger(triggerId, p1);
     }
 }

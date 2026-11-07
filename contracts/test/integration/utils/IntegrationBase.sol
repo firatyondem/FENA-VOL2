@@ -93,8 +93,4 @@ abstract contract IntegrationBase is RealMocksBase {
             assertEq(tokens[t].totalSupply(), open, "asset token supply != open positions");
         }
     }
-
-    function responseHash(IVault.SignedResponse memory response) internal pure returns (bytes32) {
-        return keccak256(abi.encode(response.requestHash, response.timestamp, response.data));
-    }
 }

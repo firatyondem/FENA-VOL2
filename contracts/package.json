@@ -1,0 +1,9 @@
+{
+  "name": "@fena/contracts",
+  "private": true,
+  "description": "The vault's Solidity dependencies that are not git submodules. Run `npm ci` here before `forge build`.",
+  "license": "MIT",
+  "dependencies": {
+    "@pythnetwork/pyth-sdk-solidity": "4.3.1"
+  }
+}

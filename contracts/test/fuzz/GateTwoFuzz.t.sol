@@ -29,7 +29,7 @@ contract GateTwoFuzzTest is FuzzBase {
     ) public {
         thresholdBps = bound(thresholdBps, 1, type(uint16).max);
         spikeCapBps = bound(spikeCapBps, thresholdBps, type(uint16).max);
-        p0 = bound(p0, 1, MAX_PRICE);
+        p0 = pythPrice(bound(p0, 1, MAX_PRICE));
         IVault.AssetRule memory assetRule = ethRule();
         assetRule.thresholdBps = uint16(thresholdBps);
         assetRule.spikeCapBps = uint16(spikeCapBps);
@@ -39,13 +39,17 @@ contract GateTwoFuzzTest is FuzzBase {
         // The lowest P1 that reaches P0 * (1 + threshold) and the highest that stays at or below P0 * (1 + cap)
         uint256 lowest = Math.ceilDiv(p0 * (BPS + thresholdBps), BPS);
         uint256 highest = p0 * (BPS + spikeCapBps) / BPS;
-        uint256 p1 = pickP1(p1Seed, mode, lowest, highest);
+        uint256 p1 = pythPrice(pickP1(p1Seed, mode, lowest, highest));
 
         (uint256 triggerId, uint256 t0) = openEthAt(p0);
         vm.warp(t0 + assetRule.minWait);
-        IVault.SignedResponse memory response = signedEthPrice(p1, block.timestamp);
+        bytes[] memory response = signedEthPrice(p1, block.timestamp);
 
-        if (p1 < lowest) {
+        if (p1 == 0) {
+            vm.expectRevert(IVault.PriceNotPositive.selector);
+            vault.confirmTrigger(triggerId, response);
+            assertNothingBought(triggerId);
+        } else if (p1 < lowest) {
             vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, p0, p1));
             vault.confirmTrigger(triggerId, response);
             assertNothingBought(triggerId);
@@ -99,7 +103,7 @@ contract GateTwoFuzzTest is FuzzBase {
         uint256 t1 = t0 + elapsed;
         vm.warp(t1 + lag);
         // +3.5%, inside the threshold and the cap
-        IVault.SignedResponse memory p1 = signedEthPrice(2070e18, t1);
+        bytes[] memory p1 = signedEthPrice(2070e18, t1);
 
         if (t1 - t0 < minWait) {
             vm.expectRevert(abi.encodeWithSelector(IVault.WaitNotOver.selector, t0 + minWait));
@@ -145,7 +149,7 @@ contract GateTwoFuzzTest is FuzzBase {
             assertTriggerStatus(triggerId, IVault.TriggerStatus.Expired);
 
             // An expired trigger never buys, even with a P1 that would have passed in the window.
-            IVault.SignedResponse memory p1 = signedEthPrice(2070e18, block.timestamp);
+            bytes[] memory p1 = signedEthPrice(2070e18, block.timestamp);
             vm.expectRevert(abi.encodeWithSelector(IVault.TriggerNotOpen.selector, triggerId));
             vault.confirmTrigger(triggerId, p1);
         }
@@ -154,10 +158,10 @@ contract GateTwoFuzzTest is FuzzBase {
         assertEq(teth.balanceOf(address(vault)), 0, "vault asset");
     }
 
-    /// @notice A P1 of 0 never buys: it is always too weak
+    /// @notice A P1 of 0 never buys: Pyth's price must be above zero
     /// forge-config: default.fuzz.runs = 1000
     function testFuzz_AZeroP1NeverBuys(uint256 p0, uint256 thresholdBps) public {
-        p0 = bound(p0, 1, MAX_PRICE);
+        p0 = pythPrice(bound(p0, 1, MAX_PRICE));
         thresholdBps = bound(thresholdBps, 1, type(uint16).max);
         IVault.AssetRule memory assetRule = looseEthRule();
         assetRule.thresholdBps = uint16(thresholdBps);
@@ -165,30 +169,10 @@ contract GateTwoFuzzTest is FuzzBase {
 
         (uint256 triggerId, uint256 t0) = openEthAt(p0);
         vm.warp(t0 + 1);
-        IVault.SignedResponse memory p1 = signedEthPrice(0, block.timestamp);
+        bytes[] memory p1 = signedEthPrice(0, block.timestamp);
 
-        vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, p0, 0));
+        vm.expectRevert(IVault.PriceNotPositive.selector);
         vault.confirmTrigger(triggerId, p1);
-        assertNothingBought(triggerId);
-    }
-
-    /// @notice A trigger with a P0 of 0 never buys: any P1 above 0 spikes past the cap, and a P1 of 0 stops at the
-    /// DEX's ZeroPrice
-    /// forge-config: default.fuzz.runs = 1000
-    function testFuzz_AZeroP0NeverBuys(uint256 p1) public {
-        p1 = bound(p1, 0, MAX_PRICE);
-        setUserEthRule(rule(), looseEthRule());
-
-        (uint256 triggerId, uint256 t0) = openEthAt(0);
-        vm.warp(t0 + 1);
-        IVault.SignedResponse memory response = signedEthPrice(p1, block.timestamp);
-
-        if (p1 == 0) {
-            vm.expectRevert(abi.encodeWithSelector(MockDEX.ZeroPrice.selector));
-        } else {
-            vm.expectRevert(abi.encodeWithSelector(IVault.SpikeTooHigh.selector, 0, p1));
-        }
-        vault.confirmTrigger(triggerId, response);
         assertNothingBought(triggerId);
     }
 

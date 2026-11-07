@@ -6,35 +6,17 @@ import {MockAssetToken} from "../../src/mocks/MockAssetToken.sol";
 import {MockDEX} from "../../src/mocks/MockDEX.sol";
 import {MockUSDC} from "../../src/mocks/MockUSDC.sol";
 import {Vault} from "../../src/vault/Vault.sol";
-import {AirnodeV2Test} from "./AirnodeV2Test.sol";
+import {PythTestKit} from "./PythTestKit.sol";
 
 /// @notice Deploys the vault on Person B's real MockDEX, MockUSDC and MockAssetToken, with two assets (ETH, OIL) and
-/// two watched accounts, and signs posts and prices with test Airnode keys
+/// two watched accounts, on a local Pyth whose updates are unsigned
 /// @dev Same asset ids as script/Deploy.s.sol: keccak256 of the asset's key. One user with an ETH-only rule is set up;
 /// everything else is left to the suite.
-abstract contract RealMocksBase is AirnodeV2Test {
-    uint256 internal constant TWITTER_EPOCH_MS = 1288834974657;
-    // 2026-10-30T12:00:00Z
-    uint256 internal constant START = 1793361600;
-
-    bytes32 internal constant ETH = keccak256("ETH");
-    bytes32 internal constant OIL = keccak256("OIL");
-    bytes32 internal constant ETH_PRICE_REQUEST = keccak256("latestFeeds ETH/USD");
-    bytes32 internal constant BTC_PRICE_REQUEST = keccak256("latestFeeds BTC/USD");
-    bytes32 internal constant OIL_PRICE_REQUEST = keccak256("latestFeeds WTI/USD");
-    bytes32 internal constant ACCOUNT = keccak256("userLastTweets realDonaldTrump");
-    bytes32 internal constant OTHER_ACCOUNT = keccak256("userLastTweets elonmusk");
-
+abstract contract RealMocksBase is PythTestKit {
     MockUSDC internal usdc;
     MockDEX internal dex;
     MockAssetToken internal teth;
     MockAssetToken internal toil;
-    Vault internal vault;
-
-    address internal priceAirnode;
-    uint256 internal priceAirnodeKey;
-    address internal tweetAirnode;
-    uint256 internal tweetAirnodeKey;
 
     address internal user = makeAddr("user");
     address internal agent = makeAddr("agent");
@@ -44,8 +26,7 @@ abstract contract RealMocksBase is AirnodeV2Test {
 
     function setUp() public virtual {
         vm.warp(START);
-        (priceAirnode, priceAirnodeKey) = makeAddrAndKey("price airnode");
-        (tweetAirnode, tweetAirnodeKey) = makeAddrAndKey("tweet airnode");
+        deployPyth();
 
         usdc = new MockUSDC();
         dex = new MockDEX(usdc, address(this));
@@ -53,12 +34,12 @@ abstract contract RealMocksBase is AirnodeV2Test {
         toil = new MockAssetToken("Test Crude Oil", "tOIL", 18, address(dex));
         dex.listAsset(teth);
         dex.listAsset(toil);
-        vault = new Vault(address(this), address(dex));
+        vault = new Vault(address(this), address(dex), address(pyth));
 
         vault.setAssetProfile(ETH, ethProfile());
         vault.setAssetProfile(OIL, oilProfile());
-        vault.setWatchableAccount(ACCOUNT, tweetAirnode);
-        vault.setWatchableAccount(OTHER_ACCOUNT, tweetAirnode);
+        vault.setWatchableAccount(ACCOUNT, true);
+        vault.setWatchableAccount(OTHER_ACCOUNT, true);
 
         fund(user, 1_000e6);
         vm.prank(user);
@@ -73,14 +54,14 @@ abstract contract RealMocksBase is AirnodeV2Test {
     function ethProfile() internal view returns (IVault.AssetProfile memory) {
         return IVault.AssetProfile({
             token: address(teth),
-            airnode: priceAirnode,
-            priceRequestHash: ETH_PRICE_REQUEST,
+            priceId: ETH_FEED,
             minThresholdBps: 300,
             maxSpikeCapBps: 1200,
             minWait: 30 minutes,
             maxWindow: 4 hours,
             maxPriceAge: 5 minutes,
-            updatedAtInMs: true
+            maxConfBps: 200,
+            maxStopLossBps: 2000
         });
     }
 
@@ -88,14 +69,14 @@ abstract contract RealMocksBase is AirnodeV2Test {
     function oilProfile() internal view returns (IVault.AssetProfile memory) {
         return IVault.AssetProfile({
             token: address(toil),
-            airnode: priceAirnode,
-            priceRequestHash: OIL_PRICE_REQUEST,
+            priceId: OIL_FEED,
             minThresholdBps: 150,
             maxSpikeCapBps: 500,
             minWait: 1 hours,
             maxWindow: 6 hours,
             maxPriceAge: 5 minutes,
-            updatedAtInMs: true
+            maxConfBps: 200,
+            maxStopLossBps: 2000
         });
     }
 
@@ -109,7 +90,8 @@ abstract contract RealMocksBase is AirnodeV2Test {
             budgetShareBps: 10_000,
             takeProfitBps: 800,
             stagnationBandBps: 100,
-            stagnationDelay: 24 hours
+            stagnationDelay: 24 hours,
+            stopLossBps: 500
         });
     }
 
@@ -123,7 +105,8 @@ abstract contract RealMocksBase is AirnodeV2Test {
             budgetShareBps: 5_000,
             takeProfitBps: 800,
             stagnationBandBps: 100,
-            stagnationDelay: 24 hours
+            stagnationDelay: 24 hours,
+            stopLossBps: 500
         });
     }
 
@@ -190,96 +173,41 @@ abstract contract RealMocksBase is AirnodeV2Test {
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // Signed responses
+    // Posts
     // ---------------------------------------------------------------------------------------------------------------
 
-    /// @dev A snowflake tweet ID whose time bits say `time`
-    function tweetIdAt(uint256 time) internal pure returns (uint256) {
-        return ((time * 1000 - TWITTER_EPOCH_MS) << 22) | 4321;
-    }
-
-    /// @dev A post of ACCOUNT, created at `createdAt` and signed now
-    function signedTweet(uint256 createdAt) internal view returns (IVault.SignedResponse memory) {
-        return signedTweetWithId(ACCOUNT, tweetIdAt(createdAt));
-    }
-
-    function signedTweetWithId(bytes32 account, uint256 tweetId)
-        internal
-        view
-        returns (IVault.SignedResponse memory)
-    {
-        // TwitterAPI.io writes the ID as a string.
-        bytes memory data = bytes(string.concat('{"id":"', vm.toString(tweetId), '"}'));
-        return sign(tweetAirnodeKey, account, block.timestamp, data);
-    }
-
-    /// @dev An ETH price, such as "2000.5", that the source took and the Airnode signed now
-    function signedPrice(string memory price) internal view returns (IVault.SignedResponse memory) {
-        return signedPriceOf(ETH_PRICE_REQUEST, price, block.timestamp);
-    }
-
-    /// @dev An ETH price that the source took at `updatedAt` and the Airnode signed now
-    function signedPriceAt(string memory price, uint256 updatedAt)
-        internal
-        view
-        returns (IVault.SignedResponse memory)
-    {
-        return signedPriceOf(ETH_PRICE_REQUEST, price, updatedAt);
-    }
-
-    /// @dev A price for the request `requestHash`, taken at `updatedAt` and signed now by the price Airnode
-    function signedPriceOf(bytes32 requestHash, string memory price, uint256 updatedAt)
-        internal
-        view
-        returns (IVault.SignedResponse memory)
-    {
-        return sign(priceAirnodeKey, requestHash, block.timestamp, priceData(price, updatedAt));
-    }
-
-    /// @dev Nodary's projection: the price and the time in milliseconds at which Nodary took it
-    function priceData(string memory price, uint256 updatedAt) internal pure returns (bytes memory) {
-        return bytes(string.concat('{"price":', price, ',"updatedAt":', vm.toString(updatedAt * 1000 + 279), "}"));
-    }
-
-    function sign(uint256 key, bytes32 requestHash, uint256 timestamp, bytes memory data)
-        internal
-        pure
-        returns (IVault.SignedResponse memory)
-    {
-        return IVault.SignedResponse({
-            requestHash: requestHash,
-            timestamp: timestamp,
-            data: data,
-            signature: signResponse(key, requestHash, timestamp, data)
-        });
+    /// @dev A post of `account` with `tweetId`
+    function signedTweetWithId(bytes32 account, uint256 tweetId) internal pure returns (Post memory) {
+        return Post(account, tweetId);
     }
 
     // ---------------------------------------------------------------------------------------------------------------
     // Flow
     // ---------------------------------------------------------------------------------------------------------------
 
-    /// @dev A post at the current time and P0 one minute later, opened by `agent_` for `user_`
-    function openTriggerFor(address user_, address agent_, bytes32 assetId, bytes32 requestHash, string memory p0)
+    /// @dev A post at the current time and P0 = `p0` on `feed` one minute later, opened by `agent_` for `user_`
+    function openTriggerFor(address user_, address agent_, bytes32 assetId, bytes32 feed, string memory p0)
         internal
         returns (uint256 triggerId)
     {
         uint256 postedAt = block.timestamp;
         vm.warp(postedAt + 1 minutes);
-        IVault.SignedResponse memory tweet = signedTweet(postedAt);
-        IVault.SignedResponse memory price = signedPriceOf(requestHash, p0, block.timestamp);
+        Post memory tweet = signedTweet(postedAt);
+        bytes[] memory price = signedPriceOf(feed, p0, block.timestamp);
         vm.prank(agent_);
-        triggerId = vault.openTrigger(user_, assetId, tweet, price);
+        triggerId = openTriggerWith(user_, assetId, tweet, price);
     }
 
+    /// @dev A post at the current time and P0 one minute later, opened by the agent
     function openEthTrigger(string memory p0) internal returns (uint256 triggerId) {
-        return openTriggerFor(user, agent, ETH, ETH_PRICE_REQUEST, p0);
+        return openTriggerFor(user, agent, ETH, ETH_FEED, p0);
     }
 
     /// @dev Opens a trigger at P0 = 2000 and confirms it 31 minutes later at P1 = 2070 (+3.5%)
     function buyEth() internal returns (uint256 positionId) {
         uint256 triggerId = openEthTrigger("2000");
         vm.warp(block.timestamp + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
         vm.prank(keeper);
         positionId = vault.confirmTrigger(triggerId, p1);
     }

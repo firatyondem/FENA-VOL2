@@ -27,7 +27,7 @@ contract ExpireFlowTest is FixtureFlowBase {
 
         // The only P1 that comes is past the window, so it cannot buy.
         vm.warp(P1_LATE_SIGNED_AT);
-        IVault.SignedResponse memory late = fixture("eth-p1-late");
+        bytes[] memory late = fixture("eth-p1-late");
         vm.expectRevert(abi.encodeWithSelector(IVault.WindowClosed.selector, deadline));
         vm.prank(keeper);
         vault.confirmTrigger(triggerId, late);

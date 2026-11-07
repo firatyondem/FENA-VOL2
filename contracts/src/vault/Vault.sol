@@ -6,31 +6,35 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
+import {PythErrors} from "@pythnetwork/pyth-sdk-solidity/PythErrors.sol";
+import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {IMockDEX} from "../interfaces/IMockDEX.sol";
 import {IVault} from "../interfaces/IVault.sol";
-import {AirnodeV2Attestation} from "../lib/AirnodeV2Attestation.sol";
-import {ProjectedJson} from "../lib/ProjectedJson.sol";
 
-/// @title Tweet-triggered trading vault
-/// @notice The agent proposes, the contract decides: every check that moves money runs here, against signed AirnodeHub
-/// data and the user's stored rule. A wrong, buggy or malicious agent can only submit triggers that revert.
+/// @title Post-triggered trading vault on Pyth prices
+/// @notice The agent proposes, the contract decides: every check that moves money runs here, against prices that the
+/// Pyth contract verifies and the user's stored rule. A wrong, buggy or malicious agent can only submit triggers that
+/// revert, or open price checks that never buy unless the market really moves.
 contract Vault is IVault, Ownable, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
     /// @notice The DEX delivered less than the output it returned for a swap
-    /// @dev Declared here and not in IVault, which stays frozen.
     error DexDeliveredLess(uint256 promised, uint256 delivered);
 
-    /// @notice Longest time from an Airnode signing a response to the vault accepting it
-    uint256 public constant MAX_RESPONSE_AGE = 5 minutes;
-
-    /// @notice Longest time from a post to the source taking P0, so an old post cannot pair with a new price
+    /// @notice Longest time from a post to Pyth publishing P0
     uint256 public constant MAX_POST_TO_P0 = 10 minutes;
+
+    /// @notice Longest time from a post to the agent opening its trigger. Posts are not signed, so this bounds how far
+    /// back an agent could place a made-up post.
+    uint256 public constant MAX_POST_AGE = 30 minutes;
 
     /// @dev Twitter's snowflake IDs hold the milliseconds since this epoch in their bits above bit 22.
     uint256 private constant TWITTER_EPOCH_MS = 1288834974657;
     uint256 private constant BPS = 10_000;
+    uint256 private constant PRICE_DECIMALS = 18;
 
+    IPyth private immutable _pyth;
     address public immutable dex;
     address public immutable quoteToken;
 
@@ -41,7 +45,7 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
     uint256 public positionCount;
 
     mapping(bytes32 assetId => AssetProfile) private _assetProfiles;
-    mapping(bytes32 account => address airnode) private _watchableAccounts;
+    mapping(bytes32 account => bool) private _isWatchableAccount;
 
     mapping(address user => Rule) private _rules;
     mapping(address user => bytes32[]) private _assetIds;
@@ -51,18 +55,20 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
     mapping(address user => mapping(bytes32 account => bool)) private _isWatched;
 
     mapping(address user => mapping(bytes32 assetId => mapping(uint256 tweetId => bool))) private _isTweetUsed;
-    mapping(address user => mapping(bytes32 responseHash => bool)) private _isResponseUsed;
+    mapping(address user => mapping(bytes32 assetId => mapping(uint256 publishTime => bool))) private _isPriceUsed;
     mapping(address user => mapping(bytes32 assetId => mapping(uint256 day => uint256))) private _spent;
     mapping(address user => mapping(bytes32 assetId => uint256)) private _lastBuyAt;
 
     mapping(uint256 triggerId => Trigger) private _triggers;
     mapping(uint256 positionId => Position) private _positions;
+    mapping(uint256 positionId => PositionExits) private _positionExits;
     // The token that a position bought, so a later change to the asset's profile cannot make it sell another token
     mapping(uint256 positionId => address token) private _positionTokens;
 
-    constructor(address admin, address dex_) Ownable(admin) {
+    constructor(address admin, address dex_, address pyth_) Ownable(admin) {
         dex = dex_;
         quoteToken = IMockDEX(dex_).quoteToken();
+        _pyth = IPyth(pyth_);
     }
 
     // ---------------------------------------------------------------------------------------------------------------
@@ -76,21 +82,23 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
     function setAssetProfile(bytes32 assetId, AssetProfile calldata profile) external onlyOwner {
         if (
             profile.token != address(0)
-                && (profile.airnode == address(0)
+                && (profile.priceId == bytes32(0)
                     || profile.minThresholdBps == 0
                     || profile.minThresholdBps > profile.maxSpikeCapBps
                     || profile.minWait == 0
                     || profile.minWait > profile.maxWindow
-                    || profile.maxPriceAge == 0)
+                    || profile.maxPriceAge == 0
+                    || profile.maxConfBps == 0
+                    || profile.maxStopLossBps >= BPS)
         ) revert InvalidRule();
         _assetProfiles[assetId] = profile;
         emit AssetProfileSet(assetId, profile);
     }
 
     /// @inheritdoc IVault
-    function setWatchableAccount(bytes32 account, address airnode) external onlyOwner {
-        _watchableAccounts[account] = airnode;
-        emit WatchableAccountSet(account, airnode);
+    function setWatchableAccount(bytes32 account, bool isWatchable) external onlyOwner {
+        _isWatchableAccount[account] = isWatchable;
+        emit WatchableAccountSet(account, isWatchable);
     }
 
     // ---------------------------------------------------------------------------------------------------------------
@@ -147,7 +155,7 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
 
         for (uint256 i; i < watchedAccounts.length; i++) {
             bytes32 account = watchedAccounts[i];
-            if (_watchableAccounts[account] == address(0)) revert AccountNotRegistered(account);
+            if (!_isWatchableAccount[account]) revert AccountNotRegistered(account);
             if (_isWatched[msg.sender][account]) revert InvalidRule();
             _isWatched[msg.sender][account] = true;
         }
@@ -169,42 +177,38 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
     // ---------------------------------------------------------------------------------------------------------------
 
     /// @inheritdoc IVault
-    function openTrigger(address user, bytes32 assetId, SignedResponse calldata tweet, SignedResponse calldata p0)
+    function openTrigger(address user, bytes32 assetId, bytes32 account, uint256 tweetId, bytes[] calldata p0Update)
         external
+        payable
+        nonReentrant
         returns (uint256 triggerId)
     {
-        // The language model's answer is not signed yet, so only the wallet that the user approved may say that a post
-        // is relevant. Every other check stands on signed data.
+        // The language model's answer and the post are not signed, so only the wallet that the user approved may say
+        // that a relevant post exists. Every check that moves money stands on Pyth prices.
         if (msg.sender != _rules[user].agent) revert NotAgent(msg.sender);
         if (isPaused[user]) revert RuleIsPaused(user);
         if (!_isAssetAllowed[user][assetId]) revert AssetNotAllowed(user, assetId);
-
-        // The post: a watched account's request, signed by its Airnode, read once per asset of the rule
-        bytes32 account = tweet.requestHash;
         if (!_isWatched[user][account]) revert AccountNotWatched(user, account);
-        address tweetAirnode = _watchableAccounts[account];
-        if (tweetAirnode == address(0)) revert AccountNotRegistered(account);
-        _verifyResponse(tweetAirnode, account, tweet);
-        uint256 tweetId = ProjectedJson.readUint(tweet.data, "id", 0);
+        if (!_isWatchableAccount[account]) revert AccountNotRegistered(account);
+
+        uint256 tweetTime = ((tweetId >> 22) + TWITTER_EPOCH_MS) / 1000;
+        if (tweetTime > block.timestamp || block.timestamp > tweetTime + MAX_POST_AGE) {
+            revert PostOutsideWindow(tweetTime);
+        }
         if (_isTweetUsed[user][assetId][tweetId]) revert TweetAlreadyUsed(user, assetId, tweetId);
         _isTweetUsed[user][assetId][tweetId] = true;
 
-        // P0, taken at most MAX_POST_TO_P0 after the post. The tweet ID is signed, and its time bits are the post's.
-        (uint256 p0Price, uint256 t0) = _verifyPrice(user, assetId, p0);
-        uint256 tweetTime = ((tweetId >> 22) + TWITTER_EPOCH_MS) / 1000;
-        if (t0 < tweetTime || t0 > tweetTime + MAX_POST_TO_P0) revert PriceOutsideTweetWindow(tweetTime, t0);
+        // P0: the first price at or after the post, at most MAX_POST_TO_P0 after it
+        uint256 fee = _takeFee(p0Update);
+        (uint256 p0, uint256 t0) = _readPrice(assetId, p0Update, fee, tweetTime);
+        _useOnce(user, assetId, t0);
 
         triggerId = ++triggerCount;
         _triggers[triggerId] = Trigger({
-            user: user,
-            assetId: assetId,
-            account: account,
-            tweetId: tweetId,
-            p0: p0Price,
-            t0: t0,
-            status: TriggerStatus.Open
+            user: user, assetId: assetId, account: account, tweetId: tweetId, p0: p0, t0: t0, status: TriggerStatus.Open
         });
-        emit TriggerOpened(triggerId, user, assetId, tweetId, p0Price, t0);
+        emit TriggerOpened(triggerId, user, assetId, tweetId, p0, t0);
+        _refund(fee);
     }
 
     // ---------------------------------------------------------------------------------------------------------------
@@ -212,8 +216,9 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
     // ---------------------------------------------------------------------------------------------------------------
 
     /// @inheritdoc IVault
-    function confirmTrigger(uint256 triggerId, SignedResponse calldata p1)
+    function confirmTrigger(uint256 triggerId, bytes[] calldata p1Update)
         external
+        payable
         nonReentrant
         returns (uint256 positionId)
     {
@@ -227,13 +232,15 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
         // The admin may have tightened the profile since the user set the rule.
         _checkAgainstProfile(assetId, assetRule);
 
-        (uint256 p1Price, uint256 t1) = _verifyPrice(user, assetId, p1);
-        _checkTrend(trigger.p0, trigger.t0, p1Price, t1, assetRule);
+        uint256 fee = _takeFee(p1Update);
+        (uint256 p1, uint256 t1) = _readFreshPrice(assetId, p1Update, fee);
+        _checkTrend(trigger.p0, trigger.t0, p1, t1, assetRule);
+        _useOnce(user, assetId, t1);
         uint256 amount = _spend(user, assetId, assetRule);
 
         trigger.status = TriggerStatus.Confirmed;
         address token = _assetProfiles[assetId].token;
-        uint256 assetOut = _buy(token, amount, p1Price);
+        uint256 assetOut = _buy(token, amount, p1);
         positionId = ++positionCount;
         _positionTokens[positionId] = token;
         _positions[positionId] = Position({
@@ -241,11 +248,18 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
             assetId: assetId,
             amount: assetOut,
             cost: amount,
-            entryPrice: p1Price,
+            entryPrice: p1,
             openedAt: block.timestamp,
             isOpen: true
         });
-        emit TriggerConfirmed(triggerId, positionId, p1Price, t1, amount, assetOut);
+        _positionExits[positionId] = PositionExits({
+            takeProfitBps: assetRule.takeProfitBps,
+            stopLossBps: assetRule.stopLossBps,
+            stagnationBandBps: assetRule.stagnationBandBps,
+            stagnationDelay: assetRule.stagnationDelay
+        });
+        emit TriggerConfirmed(triggerId, positionId, p1, t1, amount, assetOut);
+        _refund(fee);
     }
 
     /// @inheritdoc IVault
@@ -264,15 +278,15 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
     // ---------------------------------------------------------------------------------------------------------------
 
     /// @inheritdoc IVault
-    function sell(uint256 positionId, SellReason reason, SignedResponse calldata priceResponse)
+    function sell(uint256 positionId, SellReason reason, bytes[] calldata priceUpdate)
         external
+        payable
         nonReentrant
         returns (uint256 quoteOut)
     {
         Position storage position = _positions[positionId];
         if (!position.isOpen) revert PositionNotOpen(positionId);
         address user = position.user;
-        bytes32 assetId = position.assetId;
         if (reason == SellReason.Manual) {
             if (msg.sender != user) revert NotPositionOwner(msg.sender);
         } else if (isPaused[user]) {
@@ -280,30 +294,56 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
         }
 
         // The same price can sell several positions, so it is not marked as used. Each position sells once.
-        (uint256 price, uint256 priceTime) = _readPrice(assetId, priceResponse);
+        uint256 fee = _takeFee(priceUpdate);
+        (uint256 price, uint256 priceTime) = _readFreshPrice(position.assetId, priceUpdate, fee);
         if (priceTime < position.openedAt) revert PriceBeforeBuy(priceTime, position.openedAt);
+        PositionExits memory exits = _positionExits[positionId];
         if (reason == SellReason.TakeProfit) {
-            _checkTakeProfit(price, position.entryPrice, _assetRules[user][assetId]);
+            _checkTakeProfit(price, position.entryPrice, exits.takeProfitBps);
+        } else if (reason == SellReason.StopLoss) {
+            _checkStopLoss(price, position.entryPrice, exits.stopLossBps);
         } else if (reason == SellReason.Stagnation) {
-            _checkStagnation(price, priceTime, position, _assetRules[user][assetId]);
+            _checkStagnation(price, priceTime, position, exits);
         }
 
         position.isOpen = false;
         quoteOut = _sell(_positionTokens[positionId], position.amount, price);
         balanceOf[user] += quoteOut;
         emit PositionSold(positionId, user, reason, price, quoteOut);
+        _refund(fee);
     }
 
     // ---------------------------------------------------------------------------------------------------------------
     // Views
     // ---------------------------------------------------------------------------------------------------------------
 
+    /// @inheritdoc IVault
+    function checkPrice(bytes32 assetId, bytes[] calldata priceUpdate)
+        external
+        payable
+        nonReentrant
+        returns (uint256 price, uint256 publishTime)
+    {
+        uint256 fee = _takeFee(priceUpdate);
+        (price, publishTime) = _readFreshPrice(assetId, priceUpdate, fee);
+        _refund(fee);
+    }
+
+    /// @inheritdoc IVault
+    function updateFee(bytes[] calldata priceUpdate) external view returns (uint256) {
+        return _pyth.getUpdateFee(priceUpdate);
+    }
+
+    function pyth() external view returns (address) {
+        return address(_pyth);
+    }
+
     function getAssetProfile(bytes32 assetId) external view returns (AssetProfile memory) {
         return _assetProfiles[assetId];
     }
 
-    function getWatchableAccount(bytes32 account) external view returns (address airnode) {
-        return _watchableAccounts[account];
+    function isWatchableAccount(bytes32 account) external view returns (bool) {
+        return _isWatchableAccount[account];
     }
 
     function getRule(address user)
@@ -334,56 +374,119 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
         return _positions[positionId];
     }
 
-    /// @notice The checks every price must pass before a buy or a sell, open to anyone at any time: reverts with the
-    /// vault's reason, or returns the price and when the source took it. Nothing moves and the response stays unused.
-    /// @dev Declared here and not in IVault, which stays frozen. It runs the same _readPrice as confirmTrigger and sell.
-    /// A buy's replay guard is per user, so it is not part of this check.
-    function checkPrice(bytes32 assetId, SignedResponse calldata response)
-        external
-        view
-        returns (uint256 price, uint256 priceTime)
+    function getPositionExits(uint256 positionId) external view returns (PositionExits memory) {
+        return _positionExits[positionId];
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // Prices
+    // ---------------------------------------------------------------------------------------------------------------
+
+    function _takeFee(bytes[] calldata priceUpdate) private view returns (uint256 fee) {
+        fee = _pyth.getUpdateFee(priceUpdate);
+        if (msg.value < fee) revert InsufficientFee(msg.value, fee);
+    }
+
+    /// @dev Sends back what the caller paid above Pyth's fee. Every caller is behind nonReentrant.
+    function _refund(uint256 fee) private {
+        uint256 excess = msg.value - fee;
+        if (excess == 0) return;
+        (bool ok,) = msg.sender.call{value: excess}("");
+        if (!ok) revert RefundFailed();
+    }
+
+    /// @dev A P1 or sell price: any price of the asset's feed in the update, published at most maxPriceAge ago.
+    function _readFreshPrice(bytes32 assetId, bytes[] calldata priceUpdate, uint256 fee)
+        private
+        returns (uint256 price, uint256 publishTime)
     {
-        return _readPrice(assetId, response);
+        (price, publishTime) = _readPrice(assetId, priceUpdate, fee, 0);
+        if (publishTime + _assetProfiles[assetId].maxPriceAge < block.timestamp) revert PriceTooOld(publishTime);
+    }
+
+    /// @dev Lets Pyth verify the update and returns the price with 18 decimals and its publish time. With `postTime` set,
+    /// the price must be the first one at or after the post (Pyth's uniqueness check) and at most MAX_POST_TO_P0 after
+    /// it. Pyth names only a few failures, so a refused update is parsed again without limits to tell the vault's
+    /// reason; the fee of the call that reverted stays in the vault for that second call.
+    function _readPrice(bytes32 assetId, bytes[] calldata priceUpdate, uint256 fee, uint256 postTime)
+        private
+        returns (uint256 price, uint256 publishTime)
+    {
+        AssetProfile storage profile = _assetProfiles[assetId];
+        if (profile.token == address(0)) revert AssetNotRegistered(assetId);
+        bytes32[] memory ids = new bytes32[](1);
+        ids[0] = profile.priceId;
+
+        PythStructs.PriceFeed[] memory feeds;
+        if (postTime == 0) {
+            try _pyth.parsePriceFeedUpdates{value: fee}(priceUpdate, ids, 0, type(uint64).max) returns (
+                PythStructs.PriceFeed[] memory parsed
+            ) {
+                feeds = parsed;
+            } catch (bytes memory reason) {
+                _revertForPyth(reason);
+                // Without a time window, a missing price can only mean that the update has no price for the feed.
+                revert WrongPriceFeed(profile.priceId);
+            }
+        } else {
+            uint64 latest = uint64(postTime + MAX_POST_TO_P0);
+            try _pyth.parsePriceFeedUpdatesUnique{value: fee}(priceUpdate, ids, uint64(postTime), latest) returns (
+                PythStructs.PriceFeed[] memory parsed
+            ) {
+                feeds = parsed;
+            } catch (bytes memory reason) {
+                _revertForPyth(reason);
+                _explainP0(priceUpdate, ids, fee, postTime);
+            }
+        }
+
+        PythStructs.Price memory pythPrice = feeds[0].price;
+        if (pythPrice.price <= 0) revert PriceNotPositive();
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint256 raw = uint256(int256(pythPrice.price));
+        if (uint256(pythPrice.conf) * BPS > raw * profile.maxConfBps) {
+            revert PriceTooUncertain(_scale(pythPrice.conf, pythPrice.expo), _scale(raw, pythPrice.expo));
+        }
+        price = _scale(raw, pythPrice.expo);
+        publishTime = pythPrice.publishTime;
+    }
+
+    /// @dev Pyth refused the update. PriceFeedNotFoundWithinRange is left for the caller to explain; it is the only
+    /// refusal that a well-formed, correctly signed update can get.
+    function _revertForPyth(bytes memory reason) private pure {
+        if (bytes4(reason) != PythErrors.PriceFeedNotFoundWithinRange.selector) revert InvalidPriceUpdate();
+    }
+
+    /// @dev The update is valid but Pyth found no unique price in the P0 window: tells which check failed.
+    function _explainP0(bytes[] calldata priceUpdate, bytes32[] memory ids, uint256 fee, uint256 postTime) private {
+        try _pyth.parsePriceFeedUpdates{value: fee}(priceUpdate, ids, 0, type(uint64).max) returns (
+            PythStructs.PriceFeed[] memory parsed
+        ) {
+            uint256 priceTime = parsed[0].price.publishTime;
+            if (priceTime < postTime || priceTime > postTime + MAX_POST_TO_P0) {
+                revert PriceOutsideTweetWindow(postTime, priceTime);
+            }
+            revert PriceNotFirstAfterPost(postTime, priceTime);
+        } catch (bytes memory) {
+            revert WrongPriceFeed(ids[0]);
+        }
+    }
+
+    /// @dev value * 10^(18 + expo). Pyth's exponents are small negatives, such as -8 or -5.
+    function _scale(uint256 value, int32 expo) private pure returns (uint256) {
+        int256 shift = int256(PRICE_DECIMALS) + expo;
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return shift >= 0 ? value * 10 ** uint256(shift) : value / 10 ** uint256(-shift);
+    }
+
+    function _useOnce(address user, bytes32 assetId, uint256 publishTime) private {
+        if (_isPriceUsed[user][assetId][publishTime]) revert PriceAlreadyUsed(assetId, publishTime);
+        _isPriceUsed[user][assetId][publishTime] = true;
     }
 
     // ---------------------------------------------------------------------------------------------------------------
     // Checks
     // ---------------------------------------------------------------------------------------------------------------
-
-    /// @dev The signer, the request and the freshness of a response. The stored request hash goes into the digest, so
-    /// the comparison before it only gives a clearer error for a response to another request.
-    function _verifyResponse(address airnode, bytes32 requestHash, SignedResponse calldata response) private view {
-        if (response.requestHash != requestHash) revert WrongRequestHash(requestHash, response.requestHash);
-        AirnodeV2Attestation.verify(airnode, requestHash, response.timestamp, response.data, response.signature);
-        if (response.timestamp + MAX_RESPONSE_AGE < block.timestamp) revert ResponseTooOld(response.timestamp);
-    }
-
-    /// @dev Verifies a price response and reads the price and the time at which the source took it. A price that is
-    /// older than the profile allows means the market is closed or the feed is stale.
-    function _readPrice(bytes32 assetId, SignedResponse calldata response)
-        private
-        view
-        returns (uint256 price, uint256 priceTime)
-    {
-        AssetProfile storage profile = _assetProfiles[assetId];
-        if (profile.token == address(0)) revert AssetNotRegistered(assetId);
-        _verifyResponse(profile.airnode, profile.priceRequestHash, response);
-        price = ProjectedJson.readUint(response.data, "price", 18);
-        priceTime = ProjectedJson.readUint(response.data, "updatedAt", 0);
-        if (profile.updatedAtInMs) priceTime /= 1000;
-        if (priceTime + profile.maxPriceAge < block.timestamp) revert PriceTooOld(priceTime);
-    }
-
-    /// @dev Like _readPrice, but a buy uses each price response once per user.
-    function _verifyPrice(address user, bytes32 assetId, SignedResponse calldata response)
-        private
-        returns (uint256 price, uint256 priceTime)
-    {
-        (price, priceTime) = _readPrice(assetId, response);
-        bytes32 responseHash = keccak256(abi.encode(response.requestHash, response.timestamp, response.data));
-        if (_isResponseUsed[user][responseHash]) revert ResponseAlreadyUsed(responseHash);
-        _isResponseUsed[user][responseHash] = true;
-    }
 
     function _checkAgainstProfile(bytes32 assetId, AssetRule memory assetRule) private view {
         AssetProfile storage profile = _assetProfiles[assetId];
@@ -391,6 +494,7 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
         if (
             assetRule.thresholdBps < profile.minThresholdBps || assetRule.spikeCapBps > profile.maxSpikeCapBps
                 || assetRule.minWait < profile.minWait || assetRule.maxWindow > profile.maxWindow
+                || assetRule.stopLossBps > profile.maxStopLossBps
         ) revert RuleLooserThanProfile(assetId);
     }
 
@@ -428,26 +532,30 @@ contract Vault is IVault, Ownable, ReentrancyGuardTransient {
     }
 
     /// @dev Take-profit off (0) never sells. The target rounds up, so a price below entry * (1 + take-profit) by less than
-    /// a wei does not sell, as exact as the trend and stagnation checks.
-    function _checkTakeProfit(uint256 price, uint256 entryPrice, AssetRule memory assetRule) private pure {
-        uint256 target = assetRule.takeProfitBps == 0
-            ? type(uint256).max
-            : Math.ceilDiv(entryPrice * (BPS + assetRule.takeProfitBps), BPS);
+    /// a wei does not sell.
+    function _checkTakeProfit(uint256 price, uint256 entryPrice, uint16 takeProfitBps) private pure {
+        uint256 target = takeProfitBps == 0 ? type(uint256).max : Math.ceilDiv(entryPrice * (BPS + takeProfitBps), BPS);
         if (price < target) revert TakeProfitNotReached(price, target);
+    }
+
+    /// @dev Sells when P <= entry * (1 - stop-loss), compared without rounding. Stop-loss off (0) never sells, since every
+    /// price is above zero.
+    function _checkStopLoss(uint256 price, uint256 entryPrice, uint16 stopLossBps) private pure {
+        uint256 scaledLine = stopLossBps == 0 ? 0 : entryPrice * (BPS - stopLossBps);
+        if (price * BPS > scaledLine) revert StopLossNotReached(price, scaledLine / BPS);
     }
 
     /// @dev At least the stagnation delay after the buy, the price is still within entry * (1 +- band). A stagnation
     /// exit that is off (delay 0) never sells.
-    function _checkStagnation(uint256 price, uint256 priceTime, Position storage position, AssetRule memory assetRule)
+    function _checkStagnation(uint256 price, uint256 priceTime, Position storage position, PositionExits memory exits)
         private
         view
     {
-        uint256 earliest =
-            assetRule.stagnationDelay == 0 ? type(uint256).max : position.openedAt + assetRule.stagnationDelay;
+        uint256 earliest = exits.stagnationDelay == 0 ? type(uint256).max : position.openedAt + exits.stagnationDelay;
         if (priceTime < earliest) revert StagnationDelayNotOver(earliest);
         uint256 entryPrice = position.entryPrice;
         uint256 distance = price > entryPrice ? price - entryPrice : entryPrice - price;
-        if (distance * BPS > entryPrice * assetRule.stagnationBandBps) {
+        if (distance * BPS > entryPrice * exits.stagnationBandBps) {
             revert PriceOutsideStagnationBand(price, entryPrice);
         }
     }

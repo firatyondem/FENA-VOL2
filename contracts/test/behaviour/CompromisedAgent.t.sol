@@ -2,7 +2,6 @@
 pragma solidity ^0.8.24;
 
 import {IVault} from "../../src/interfaces/IVault.sol";
-import {AirnodeV2Attestation} from "../../src/lib/AirnodeV2Attestation.sol";
 import {BehaviourBase} from "./BehaviourBase.sol";
 import {FixtureBase} from "./FixtureBase.sol";
 
@@ -14,7 +13,7 @@ contract CompromisedAgentFixtureTest is FixtureBase {
         // A genuine oil price after a genuine post of a watched account, but oil is not in the user's rule
         expectRejectedOpen(
             OIL,
-            fixture("tweet-trump-venezuela"),
+            fixtureTweet("tweet-trump-venezuela"),
             fixture("oil-p0"),
             abi.encodeWithSelector(IVault.AssetNotAllowed.selector, user, OIL)
         );
@@ -25,7 +24,7 @@ contract CompromisedAgentFixtureTest is FixtureBase {
 
         expectRejectedOpen(
             doge,
-            fixture("tweet-trump-venezuela"),
+            fixtureTweet("tweet-trump-venezuela"),
             fixture("eth-p0"),
             abi.encodeWithSelector(IVault.AssetNotAllowed.selector, user, doge)
         );
@@ -35,32 +34,32 @@ contract CompromisedAgentFixtureTest is FixtureBase {
         // elonmusk is registered with the vault, but the user does not watch it
         expectRejectedOpen(
             ETH,
-            fixture("tweet-musk-doge"),
+            fixtureTweet("tweet-musk-doge"),
             fixture("eth-p0"),
             abi.encodeWithSelector(IVault.AccountNotWatched.selector, user, muskAccount)
         );
     }
 
     function test_RevertWhen_TheAgentRepeatsATweet() public {
-        uint256 triggerId = openWith(user, agent, ETH, fixture("tweet-trump-venezuela"), fixture("eth-p0"));
+        uint256 triggerId = openWith(user, agent, ETH, fixtureTweet("tweet-trump-venezuela"), fixture("eth-p0"));
         assertEq(vault.getTrigger(triggerId).tweetId, TRUMP_TWEET_ID, "tweet ID");
 
         // The same post with a P0 that has not been used yet
         expectRejectedOpen(
             ETH,
-            fixture("tweet-trump-venezuela"),
+            fixtureTweet("tweet-trump-venezuela"),
             fixture("eth-p1-early"),
             abi.encodeWithSelector(IVault.TweetAlreadyUsed.selector, user, ETH, TRUMP_TWEET_ID)
         );
     }
 
     function test_RevertWhen_TheAgentPairsAnOldTweetWithAFreshPrice() public {
-        // A two-day-old post with a fresh signature
+        // A two-day-old post with a fresh price
         expectRejectedOpen(
             ETH,
-            fixture("tweet-trump-old"),
+            fixtureTweet("tweet-trump-old"),
             fixture("eth-p0"),
-            abi.encodeWithSelector(IVault.PriceOutsideTweetWindow.selector, OLD_TWEET_CREATED_AT, T0)
+            abi.encodeWithSelector(IVault.PostOutsideWindow.selector, OLD_TWEET_CREATED_AT)
         );
     }
 
@@ -71,14 +70,14 @@ contract CompromisedAgentFixtureTest is FixtureBase {
 
         vm.prank(agent);
         vm.expectRevert(abi.encodeWithSelector(IVault.NotAgent.selector, agent));
-        vault.openTrigger(user2, ETH, fixture("tweet-trump-venezuela"), fixture("eth-p0"));
+        openTriggerWith(user2, ETH, fixtureTweet("tweet-trump-venezuela"), fixture("eth-p0"));
 
         assertBooks(books(), before);
     }
 
     function test_RevertWhen_TheAgentConfirmsAFlatPrice() public {
         // The agent opened a trigger on a genuine post, but the signed prices do not confirm a trend.
-        uint256 triggerId = openWith(user, agent, ETH, fixture("tweet-trump-venezuela"), fixture("eth-p0"));
+        uint256 triggerId = openWith(user, agent, ETH, fixtureTweet("tweet-trump-venezuela"), fixture("eth-p0"));
         vm.warp(CONFIRM_AT);
         Books memory before = books();
 
@@ -99,17 +98,14 @@ contract CompromisedAgentFixtureTest is FixtureBase {
     }
 
     /// @dev The agent's open reverts with `expectedError` and opens nothing
-    function expectRejectedOpen(
-        bytes32 assetId,
-        IVault.SignedResponse memory tweet,
-        IVault.SignedResponse memory p0,
-        bytes memory expectedError
-    ) private {
+    function expectRejectedOpen(bytes32 assetId, Post memory tweet, bytes[] memory p0, bytes memory expectedError)
+        private
+    {
         Books memory before = books();
 
         vm.prank(agent);
         vm.expectRevert(expectedError);
-        vault.openTrigger(user, assetId, tweet, p0);
+        openTriggerWith(user, assetId, tweet, p0);
 
         assertBooks(books(), before);
     }
@@ -118,43 +114,36 @@ contract CompromisedAgentFixtureTest is FixtureBase {
 /// @notice A compromised agent wallet with its own keys: it cannot forge signed data, reuse a post, unpause the user,
 /// withdraw the user's funds, or sell a position to itself
 contract CompromisedAgentTest is BehaviourBase {
-    // A key that the attacker controls, not the Airnode's
-    address forger;
-    uint256 forgerKey;
-
-    function setUp() public override {
-        super.setUp();
-        (forger, forgerKey) = makeAddrAndKey("agent's own key");
-    }
-
     // ---------------------------------------------------------------------------------------------------------------
     // Gate 1
     // ---------------------------------------------------------------------------------------------------------------
 
-    function test_RevertWhen_TheAgentSignsAPostItself() public {
-        vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory tweet = sign(
-            forgerKey,
-            ACCOUNT,
-            block.timestamp,
-            bytes(string.concat('{"id":"', vm.toString(tweetIdAt(block.timestamp - 1 minutes)), '"}'))
-        );
-
+    function test_AMadeUpPostOnlyOpensAPriceCheck() public {
+        // Posts are not signed, so the agent can name a post that never happened. The trigger opens, but the vault buys
+        // only if Pyth's later price confirms the rise, and the money stays put when it does not.
+        uint256 madeUpAt = block.timestamp;
+        vm.warp(madeUpAt + 1 minutes);
+        Post memory madeUp = postOf(ACCOUNT, tweetIdAt(madeUpAt));
+        bytes[] memory p0 = signedPrice("2000");
         vm.prank(agent);
-        vm.expectRevert(abi.encodeWithSelector(AirnodeV2Attestation.NotSignedByAirnode.selector, forger));
-        vault.openTrigger(user, ETH, tweet, signedPrice("2000"));
-        assertEq(vault.triggerCount(), 0, "trigger count");
+        uint256 triggerId = openTriggerWith(user, ETH, madeUp, p0);
+        Books memory before = books();
+
+        vm.warp(block.timestamp + 31 minutes);
+        bytes[] memory flat = signedPrice("2001");
+        vm.expectPartialRevert(IVault.TrendTooWeak.selector);
+        vault.confirmTrigger(triggerId, flat);
+        assertBooks(books(), before);
     }
 
     function test_RevertWhen_TheAgentSignsAP0Itself() public {
         uint256 postedAt = block.timestamp;
         vm.warp(postedAt + 1 minutes);
-        IVault.SignedResponse memory p0 =
-            sign(forgerKey, ETH_PRICE_REQUEST, block.timestamp, priceData("1000", block.timestamp));
+        bytes[] memory p0 = edited(signedPrice("1000"));
 
         vm.prank(agent);
-        vm.expectRevert(abi.encodeWithSelector(AirnodeV2Attestation.NotSignedByAirnode.selector, forger));
-        vault.openTrigger(user, ETH, signedTweet(postedAt), p0);
+        vm.expectRevert(IVault.InvalidPriceUpdate.selector);
+        openTriggerWith(user, ETH, signedTweet(postedAt), p0);
         assertEq(vault.triggerCount(), 0, "trigger count");
     }
 
@@ -167,15 +156,15 @@ contract CompromisedAgentTest is BehaviourBase {
         uint256 postedAt = block.timestamp;
         uint256 tweetId = tweetIdAt(postedAt);
         vm.warp(postedAt + 1 minutes);
-        IVault.SignedResponse memory tweet = signedTweet(postedAt);
+        Post memory tweet = signedTweet(postedAt);
         vm.startPrank(agent);
-        vault.openTrigger(user, ETH, tweet, signedPrice("2000"));
-        vault.openTrigger(user, OIL, tweet, signedPriceOf(OIL_PRICE_REQUEST, "70", block.timestamp));
+        openTriggerWith(user, ETH, tweet, signedPrice("2000"));
+        openTriggerWith(user, OIL, tweet, signedPriceOf(OIL_FEED, "70", block.timestamp));
 
         vm.expectRevert(abi.encodeWithSelector(IVault.TweetAlreadyUsed.selector, user, ETH, tweetId));
-        vault.openTrigger(user, ETH, tweet, signedPrice("2001"));
+        openTriggerWith(user, ETH, tweet, signedPrice("2001"));
         vm.expectRevert(abi.encodeWithSelector(IVault.TweetAlreadyUsed.selector, user, OIL, tweetId));
-        vault.openTrigger(user, OIL, tweet, signedPriceOf(OIL_PRICE_REQUEST, "71", block.timestamp));
+        openTriggerWith(user, OIL, tweet, signedPriceOf(OIL_FEED, "71", block.timestamp));
         vm.stopPrank();
         assertEq(vault.triggerCount(), 2, "trigger count");
     }
@@ -196,7 +185,7 @@ contract CompromisedAgentTest is BehaviourBase {
         uint256 postedAt = block.timestamp;
         uint256 triggerId = openEthTrigger("2000");
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("2070");
+        bytes[] memory p1 = signedPrice("2070");
         vm.prank(keeper);
         vault.confirmTrigger(triggerId, p1);
 
@@ -223,11 +212,11 @@ contract CompromisedAgentTest is BehaviourBase {
 
         uint256 postedAt = block.timestamp;
         vm.warp(postedAt + 1 minutes);
-        IVault.SignedResponse memory tweet = signedTweet(postedAt);
-        IVault.SignedResponse memory p0 = signedPrice("2000");
+        Post memory tweet = signedTweet(postedAt);
+        bytes[] memory p0 = signedPrice("2000");
         vm.prank(agent);
         vm.expectRevert(abi.encodeWithSelector(IVault.RuleIsPaused.selector, user));
-        vault.openTrigger(user, ETH, tweet, p0);
+        openTriggerWith(user, ETH, tweet, p0);
     }
 
     function test_SetRule_ByTheAgentLeavesTheUsersRuleAlone() public {
@@ -275,7 +264,7 @@ contract CompromisedAgentTest is BehaviourBase {
 
     function test_RevertWhen_TheAgentSellsAPositionByHand() public {
         uint256 positionId = buyEth();
-        IVault.SignedResponse memory price = signedPrice("2100");
+        bytes[] memory price = signedPrice("2100");
         Books memory before = books();
 
         vm.prank(agent);
@@ -288,7 +277,7 @@ contract CompromisedAgentTest is BehaviourBase {
 
     function test_RevertWhen_TheAgentSellsBeforeTakeProfit() public {
         uint256 positionId = buyEth();
-        IVault.SignedResponse memory price = signedPrice("2100");
+        bytes[] memory price = signedPrice("2100");
         Books memory before = books();
 
         // Entry 2070 + 8% = 2235.6
@@ -304,7 +293,7 @@ contract CompromisedAgentTest is BehaviourBase {
         uint256 positionId = buyEth();
         uint256 openedAt = vault.getPosition(positionId).openedAt;
         vm.warp(block.timestamp + 1 hours);
-        IVault.SignedResponse memory price = signedPrice("2070");
+        bytes[] memory price = signedPrice("2070");
         Books memory before = books();
 
         vm.prank(agent);
@@ -317,13 +306,12 @@ contract CompromisedAgentTest is BehaviourBase {
 
     function test_RevertWhen_TheAgentSellsAtAPriceItSigned() public {
         uint256 positionId = buyEth();
-        // A take-profit price that no Airnode signed
-        IVault.SignedResponse memory price =
-            sign(forgerKey, ETH_PRICE_REQUEST, block.timestamp, priceData("9999", block.timestamp));
+        // A take-profit price that Pyth did not sign
+        bytes[] memory price = edited(signedPrice("9999"));
         Books memory before = books();
 
         vm.prank(agent);
-        vm.expectRevert(abi.encodeWithSelector(AirnodeV2Attestation.NotSignedByAirnode.selector, forger));
+        vm.expectRevert(IVault.InvalidPriceUpdate.selector);
         vault.sell(positionId, IVault.SellReason.TakeProfit, price);
 
         assertBooks(books(), before);
@@ -333,7 +321,7 @@ contract CompromisedAgentTest is BehaviourBase {
     function test_Sell_PaysTheUserWhenTheAgentTakesProfit() public {
         uint256 positionId = buyEth();
         uint256 amount = vault.getPosition(positionId).amount;
-        IVault.SignedResponse memory price = signedPrice("2240");
+        bytes[] memory price = signedPrice("2240");
         uint256 expectedOut = dex.quoteSell(address(teth), amount, 2240e18);
 
         vm.expectEmit(address(vault));
@@ -354,7 +342,7 @@ contract CompromisedAgentTest is BehaviourBase {
         uint256 amount = vault.getPosition(positionId).amount;
         vm.warp(block.timestamp + 24 hours);
         // Within 1% of the 2070 entry
-        IVault.SignedResponse memory price = signedPrice("2060");
+        bytes[] memory price = signedPrice("2060");
         uint256 expectedOut = dex.quoteSell(address(teth), amount, 2060e18);
 
         vm.prank(agent);
@@ -385,19 +373,22 @@ contract CompromisedAgentTest is BehaviourBase {
     function expectRepeatedTweet(uint256 postedAt) private {
         assertLe(block.timestamp, postedAt + 10 minutes, "P0 can no longer pair with the post");
         uint256 tweetId = tweetIdAt(postedAt);
-        IVault.SignedResponse memory tweet = signedTweet(postedAt);
-        IVault.SignedResponse memory p0 = signedPrice("2001");
+        Post memory tweet = signedTweet(postedAt);
+        bytes[] memory p0 = signedPrice("2001");
         uint256 triggerCount = vault.triggerCount();
 
         vm.prank(agent);
         vm.expectRevert(abi.encodeWithSelector(IVault.TweetAlreadyUsed.selector, user, ETH, tweetId));
-        vault.openTrigger(user, ETH, tweet, p0);
+        openTriggerWith(user, ETH, tweet, p0);
         assertEq(vault.triggerCount(), triggerCount, "trigger count");
 
-        // Control: a different post from the same moment opens a trigger with the same P0.
-        IVault.SignedResponse memory otherTweet = signedTweetWithId(ACCOUNT, tweetId + 1);
+        // Control: a different post from the same moment opens a trigger. Its P0 comes a second later, since each
+        // price opens or confirms once per user and asset.
+        vm.warp(block.timestamp + 1);
+        Post memory otherTweet = signedTweetWithId(ACCOUNT, tweetId + 1);
+        bytes[] memory nextP0 = signedPrice("2001");
         vm.prank(agent);
-        vault.openTrigger(user, ETH, otherTweet, p0);
+        openTriggerWith(user, ETH, otherTweet, nextP0);
         assertEq(vault.triggerCount(), triggerCount + 1, "trigger count after another post");
     }
 }

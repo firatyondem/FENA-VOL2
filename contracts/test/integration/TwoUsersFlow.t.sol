@@ -17,18 +17,19 @@ contract TwoUsersFlowTest is FixtureFlowBase {
     }
 
     function test_TwoUsers_SameTweetAndSamePricesBuyForBoth() public {
-        IVault.SignedResponse memory trumpTweet = fixture("tweet-trump-venezuela");
-        IVault.SignedResponse memory muskTweet = fixture("tweet-musk-doge");
-        IVault.SignedResponse memory p0 = fixture("eth-p0");
+        Post memory trumpTweet = fixtureTweet("tweet-trump-venezuela");
+        Post memory muskTweet = fixtureTweet("tweet-musk-doge");
+        bytes[] memory p0 = fixture("eth-p0");
         // eth-p1-early is a valid ETH price one minute after P0; here it serves as the P0 of a second trigger.
-        IVault.SignedResponse memory secondP0 = fixture("eth-p1-early");
+        // The first ETH price after the second post: 2000, so the shared P1 would confirm its trend too
+        bytes[] memory secondP0 = signedPriceOf(ETH_FEED, "2000", T1_EARLY);
 
         // Gate 1: each agent opens a trigger for its own user with the same post and the same P0.
         vm.warp(P0_SIGNED_AT);
         vm.prank(aliceAgent);
-        uint256 aliceTrigger = vault.openTrigger(alice, ETH, trumpTweet, p0);
+        uint256 aliceTrigger = openTriggerWith(alice, ETH, trumpTweet, p0);
         vm.prank(bobAgent);
-        uint256 bobTrigger = vault.openTrigger(bob, ETH, trumpTweet, p0);
+        uint256 bobTrigger = openTriggerWith(bob, ETH, trumpTweet, p0);
         assertEq(vault.getTrigger(aliceTrigger).user, alice);
         assertEq(vault.getTrigger(bobTrigger).user, bob);
         assertEq(vault.getTrigger(aliceTrigger).tweetId, vault.getTrigger(bobTrigger).tweetId);
@@ -37,35 +38,35 @@ contract TwoUsersFlowTest is FixtureFlowBase {
         // Bob's agent cannot act for Alice.
         vm.expectRevert(abi.encodeWithSelector(IVault.NotAgent.selector, bobAgent));
         vm.prank(bobAgent);
-        vault.openTrigger(alice, ETH, muskTweet, secondP0);
+        openTriggerWith(alice, ETH, muskTweet, secondP0);
 
         // Alice's tweet guard: the same post cannot open a second ETH trigger for her.
         vm.expectRevert(abi.encodeWithSelector(IVault.TweetAlreadyUsed.selector, alice, ETH, TRUMP_TWEET_ID));
         vm.prank(aliceAgent);
-        vault.openTrigger(alice, ETH, trumpTweet, p0);
+        openTriggerWith(alice, ETH, trumpTweet, p0);
 
-        // Alice's response guard: with a fresh post, the P0 that she already used is refused.
-        vm.expectRevert(abi.encodeWithSelector(IVault.ResponseAlreadyUsed.selector, responseHash(p0)));
+        // Alice's price guard: with a fresh post, the P0 that she already used is refused.
+        vm.expectRevert(abi.encodeWithSelector(IVault.PriceAlreadyUsed.selector, ETH, T0));
         vm.prank(aliceAgent);
-        vault.openTrigger(alice, ETH, muskTweet, p0);
+        openTriggerWith(alice, ETH, muskTweet, p0);
 
         // A fresh post and a fresh price open a second trigger for Alice.
         vm.warp(P1_EARLY_SIGNED_AT);
         vm.prank(aliceAgent);
-        uint256 aliceSecondTrigger = vault.openTrigger(alice, ETH, muskTweet, secondP0);
+        uint256 aliceSecondTrigger = openTriggerWith(alice, ETH, muskTweet, secondP0);
         assertEq(vault.getTrigger(aliceSecondTrigger).tweetId, MUSK_TWEET_ID);
         assertEq(vault.getTrigger(aliceSecondTrigger).t0, T1_EARLY);
 
         // Gate 2: the same signed P1 confirms both users' triggers.
         vm.warp(P1_SIGNED_AT);
-        IVault.SignedResponse memory p1 = fixture("eth-p1-rise");
+        bytes[] memory p1 = fixture("eth-p1-rise");
         vm.prank(keeper);
         uint256 alicePosition = vault.confirmTrigger(aliceTrigger, p1);
         vm.prank(keeper);
         uint256 bobPosition = vault.confirmTrigger(bobTrigger, p1);
 
         // Alice cannot use that P1 again, even for another trigger of hers.
-        vm.expectRevert(abi.encodeWithSelector(IVault.ResponseAlreadyUsed.selector, responseHash(p1)));
+        vm.expectRevert(abi.encodeWithSelector(IVault.PriceAlreadyUsed.selector, ETH, T1));
         vm.prank(keeper);
         vault.confirmTrigger(aliceSecondTrigger, p1);
         assertEq(uint256(vault.getTrigger(aliceSecondTrigger).status), uint256(IVault.TriggerStatus.Open));
@@ -90,7 +91,7 @@ contract TwoUsersFlowTest is FixtureFlowBase {
 
         // One signed sell price may sell both positions; each sells once.
         vm.warp(P1_SIGNED_AT + 1 hours);
-        IVault.SignedResponse memory takeProfit = fixtureSignedPrice(ethRequest, "2235.6");
+        bytes[] memory takeProfit = fixtureSignedPrice(ETH_FEED, "2235.6");
         vm.prank(stranger);
         uint256 aliceOut = vault.sell(alicePosition, IVault.SellReason.TakeProfit, takeProfit);
         vm.prank(stranger);

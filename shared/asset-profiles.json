@@ -1,10 +1,15 @@
 {
-  "$comment": "Default rule parameters per asset (spec: Asset profiles). Users may make a profile stricter, never looser. Percentages are basis points (100 = 1%), times are seconds, prices are read with 18 decimals.",
-  "version": 1,
+  "$comment": "Default rule parameters per asset. Users may make a profile stricter, never looser. Percentages are basis points (100 = 1%), times are seconds, prices are read with 18 decimals. Prices are Pyth price feeds; the vault verifies each update on the Pyth contract of its chain.",
+  "version": 2,
   "priceDecimals": 18,
   "usdcDecimals": 6,
   "maxPriceAgeSec": 300,
   "maxTweetToP0Sec": 600,
+  "maxPostAgeSec": 1800,
+  "$maxConfBps": "Widest Pyth confidence interval the vault accepts, as a share of the price. Crypto runs at about 0.1%; equities widen out of hours.",
+  "maxConfBps": 100,
+  "$maxStopLossBps": "Highest stop-loss a rule may set: a rule may sell at most 20% below its entry.",
+  "maxStopLossBps": 2000,
   "ruleDefaults": {
     "maxPerTradeBps": 500,
     "dailyLimitBps": 2000,
@@ -20,112 +25,155 @@
     "cooldownSec": 60,
     "stagnationAfterSec": 600
   },
-  "airnodes": {
-    "nodary": {
-      "url": "https://airnode-nodary.fly.dev/",
-      "address": "0xE70f1e8b22a21e4Bb5188918a3033341b281E4c0"
+  "pyth": {
+    "$comment": "Pyth Core contracts by chain id. Hermes needs an API key (Authorization: Bearer) since 2026-08-26.",
+    "contracts": {
+      "84532": "0xA2aa501b19aff244D90cc15a4Cf739D2725B5729"
     },
-    "tickerlayer": {
-      "url": "https://airnode-tickerlayer.fly.dev/",
-      "address": "0x32f5eA20F05fdADfCD50Cb8eD920acE96D5f9f2c"
-    },
-    "twitterapi": {
-      "url": "https://airnode-twitterapi.fly.dev/",
-      "address": "0x7B02Fd3324D2dC362f65a9c01e59EC5fDb4E1CCB"
-    }
+    "hermesUrl": "https://hermes.pyth.network"
   },
   "assets": {
     "ETH": {
       "name": "Ether",
-      "token": { "symbol": "tETH", "name": "Test Ether", "decimals": 18 },
+      "token": {
+        "symbol": "tETH",
+        "name": "Test Ether",
+        "decimals": 18
+      },
       "market": "24/7",
       "trendThresholdBps": 300,
       "spikeCapBps": 1200,
       "minWaitSec": 1800,
       "maxWindowSec": 14400,
-      "price": {
-        "airnode": "nodary",
-        "operation": "latestFeeds",
-        "parameters": { "name": "ETH/USD" },
-        "responseProjection": { "price": "/ETH~1USD/value", "updatedAt": "/ETH~1USD/timestamp" },
-        "timeField": "updatedAt",
-        "timeUnit": "ms"
-      },
-      "suggestedTopics": ["crypto reserve", "SEC", "crypto rules", "stablecoin law", "Fed", "interest rates", "Ethereum"]
+      "suggestedTopics": [
+        "crypto reserve",
+        "SEC",
+        "crypto rules",
+        "stablecoin law",
+        "Fed",
+        "interest rates",
+        "Ethereum"
+      ],
+      "pyth": {
+        "priceId": "0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
+        "symbol": "Crypto.ETH/USD"
+      }
     },
     "BTC": {
       "name": "Bitcoin",
-      "token": { "symbol": "tBTC", "name": "Test Bitcoin", "decimals": 18 },
+      "token": {
+        "symbol": "tBTC",
+        "name": "Test Bitcoin",
+        "decimals": 18
+      },
       "market": "24/7",
       "trendThresholdBps": 300,
       "spikeCapBps": 1200,
       "minWaitSec": 1800,
       "maxWindowSec": 14400,
-      "price": {
-        "airnode": "nodary",
-        "operation": "latestFeeds",
-        "parameters": { "name": "BTC/USD" },
-        "responseProjection": { "price": "/BTC~1USD/value", "updatedAt": "/BTC~1USD/timestamp" },
-        "timeField": "updatedAt",
-        "timeUnit": "ms"
-      },
-      "suggestedTopics": ["Bitcoin", "strategic bitcoin reserve", "crypto capital", "SEC", "crypto rules", "Fed"]
+      "suggestedTopics": [
+        "Bitcoin",
+        "strategic bitcoin reserve",
+        "crypto capital",
+        "SEC",
+        "crypto rules",
+        "Fed"
+      ],
+      "pyth": {
+        "priceId": "0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
+        "symbol": "Crypto.BTC/USD"
+      }
     },
     "DOGE": {
       "name": "Dogecoin",
-      "token": { "symbol": "tDOGE", "name": "Test Dogecoin", "decimals": 18 },
+      "token": {
+        "symbol": "tDOGE",
+        "name": "Test Dogecoin",
+        "decimals": 18
+      },
       "market": "24/7",
       "$comment": "DOGE moves more than ETH, so its limits are wider (spec: Account to investment areas).",
       "trendThresholdBps": 500,
       "spikeCapBps": 2000,
       "minWaitSec": 1800,
       "maxWindowSec": 14400,
-      "price": {
-        "airnode": "nodary",
-        "operation": "latestFeeds",
-        "parameters": { "name": "DOGE/USD" },
-        "responseProjection": { "price": "/DOGE~1USD/value", "updatedAt": "/DOGE~1USD/timestamp" },
-        "timeField": "updatedAt",
-        "timeUnit": "ms"
-      },
-      "suggestedTopics": ["Dogecoin", "doge", "shiba", "meme coin", "to the moon"]
+      "suggestedTopics": [
+        "Dogecoin",
+        "doge",
+        "shiba",
+        "meme coin",
+        "to the moon"
+      ],
+      "pyth": {
+        "priceId": "0xdcef50dd0a4cd2dcc17e45df1676dcb336a11a61c69df7a0299b0150c672d25c",
+        "symbol": "Crypto.DOGE/USD"
+      }
     },
     "TSLA": {
       "name": "Tesla",
-      "token": { "symbol": "tTSLA", "name": "Test Tesla", "decimals": 18 },
+      "token": {
+        "symbol": "tTSLA",
+        "name": "Test Tesla",
+        "decimals": 18
+      },
       "market": "exchange-hours",
       "trendThresholdBps": 200,
       "spikeCapBps": 800,
       "minWaitSec": 3600,
       "maxWindowSec": 23400,
-      "price": {
-        "airnode": "tickerlayer",
-        "operation": "lastTrade",
-        "parameters": { "assetClass": "stocks", "symbol": "US:TSLA" },
-        "responseProjection": { "price": "/price", "updatedAt": "/timestamp" },
-        "timeField": "updatedAt",
-        "timeUnit": "ms",
-        "$todo": "Confirm the unit of lastTrade.timestamp with one paid call"
+      "suggestedTopics": [
+        "Tesla",
+        "EV tax credit",
+        "EV mandate",
+        "auto tariffs",
+        "China tariffs",
+        "self-driving",
+        "robotaxi"
+      ],
+      "pyth": {
+        "priceId": "0x16dad506d7db8da01c87581c87ca897a012a153557d4d578c3b9c9e1bc0632f1",
+        "symbol": "Equity.US.TSLA/USD"
+      }
+    },
+    "SPY": {
+      "name": "S&P 500 ETF (SPY)",
+      "token": {
+        "symbol": "tSPY",
+        "name": "Test S&P 500 ETF",
+        "decimals": 18
       },
-      "suggestedTopics": ["Tesla", "EV tax credit", "EV mandate", "auto tariffs", "China tariffs", "self-driving", "robotaxi"]
+      "market": "exchange-hours",
+      "trendThresholdBps": 100,
+      "spikeCapBps": 500,
+      "minWaitSec": 3600,
+      "maxWindowSec": 23400,
+      "pyth": {
+        "priceId": "0x19e09bb805456ada3979a7d1cbb4b6d63babc3a0f8e8a9509f68afa5c4c11cd5",
+        "symbol": "Equity.US.SPY/USD"
+      },
+      "suggestedTopics": [
+        "stock market",
+        "S&P 500",
+        "tariffs",
+        "Fed",
+        "interest rates",
+        "recession",
+        "jobs report",
+        "inflation"
+      ]
     },
     "OIL": {
-      "name": "Crude oil (WTI)",
-      "token": { "symbol": "tOIL", "name": "Test Crude Oil", "decimals": 18 },
-      "market": "24/5",
+      "name": "Crude oil (WTI, constant 1-month)",
+      "token": {
+        "symbol": "tOIL",
+        "name": "Test Crude Oil",
+        "decimals": 18
+      },
+      "market": "23/5",
       "trendThresholdBps": 150,
       "spikeCapBps": 500,
       "minWaitSec": 3600,
       "maxWindowSec": 21600,
-      "price": {
-        "airnode": "tickerlayer",
-        "operation": "lastTrade",
-        "parameters": { "assetClass": "commodities", "symbol": "WTIUSD" },
-        "responseProjection": { "price": "/price", "updatedAt": "/timestamp" },
-        "timeField": "updatedAt",
-        "timeUnit": "ms",
-        "$todo": "Confirm the unit of lastTrade.timestamp with one paid call"
-      },
       "suggestedTopics": [
         "Venezuela",
         "Iran",
@@ -138,7 +186,11 @@
         "pipeline",
         "strategic petroleum reserve",
         "energy tariffs"
-      ]
+      ],
+      "pyth": {
+        "priceId": "0xf2464139c45f26097e0173b03207c4a490dbd8bf1b72dfbf064eeb832c7c2933",
+        "symbol": "Commodities.Index.WTI1M/USD"
+      }
     }
   }
 }

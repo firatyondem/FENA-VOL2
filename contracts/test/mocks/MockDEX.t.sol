@@ -18,7 +18,7 @@ contract MockDEXTest is Test {
     address internal trader = makeAddr("trader");
     address internal stranger = makeAddr("stranger");
 
-    // 2244.695 USD, as Nodary signed it and ProjectedJson reads it with 18 decimals
+    // 2244.695 USD with 18 decimals
     uint256 internal constant ETH_PRICE = 2244.695e18;
 
     event Bought(address indexed trader, address indexed asset, uint256 usdcIn, uint256 assetOut, uint256 price);

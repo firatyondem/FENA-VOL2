@@ -12,6 +12,7 @@ remappings = [
   "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
   "forge-std/=lib/forge-std/src/",
   "solady/=lib/solady/src/",
+  "@pythnetwork/pyth-sdk-solidity/=node_modules/@pythnetwork/pyth-sdk-solidity/",
 ]
 # Tests read signed responses from the shared fixtures and from their own copies. The deploy script reads the asset
 # profiles and writes the deployed addresses.
@@ -19,6 +20,7 @@ fs_permissions = [
   { access = "read", path = "../shared/fixtures" },
   { access = "read", path = "./test/fixtures" },
   { access = "read", path = "../shared/asset-profiles.json" },
+  { access = "read", path = "../agent/config/watchlist.json" },
   { access = "read-write", path = "../shared/deployments" },
 ]
 # Leaves out the compiler warnings of the dependencies.

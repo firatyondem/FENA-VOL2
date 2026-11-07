@@ -6,37 +6,53 @@ import {IVault} from "../../src/interfaces/IVault.sol";
 import {Vault} from "../../src/vault/Vault.sol";
 import {Deploy} from "../../script/Deploy.s.sol";
 
-/// @notice Integration flow 7: Person B's deploy script, run without broadcasting, sets every profile of
-/// shared/asset-profiles.json and registers every watched account of shared/deployments/request-hashes.json
-/// @dev The expected values are read straight from those two files, not from the script. The script writes its addresses
-/// to an e2e-*.json file, which .gitignore ignores, and the test removes it at once. Everything runs in one test
-/// function, one mode after the other, because the script reads its settings from process-wide environment variables
-/// and Forge runs test functions in parallel.
+/// @notice The deploy script registers every asset of shared/asset-profiles.json with its Pyth feed and limits, and every
+/// account of agent/config/watchlist.json, and writes the addresses
 contract DeployScriptFlowTest is Test {
     string constant PROFILES = "../shared/asset-profiles.json";
-    string constant HASHES = "../shared/deployments/request-hashes.json";
-    string constant MANIFEST = "../shared/fixtures/synthetic/manifest.json";
+    string constant WATCHLIST = "../agent/config/watchlist.json";
     string constant OUT = "../shared/deployments/e2e-forge-test.json";
     uint256 constant DEPLOYER_KEY = 0xA11CE;
 
-    function test_Deploy_SetsEveryProfileAndAccountInAllFourModes() public {
-        runAndCheck(true, true);
-        runAndCheck(false, true);
-        runAndCheck(true, false);
-        runAndCheck(false, false);
+    /// @dev One test, because the script reads environment variables, which tests running in parallel would share
+    function test_Deploy_PicksPythAndRegistersEverything() public {
+        // A local chain without Pyth gets LocalPyth.
+        vm.setEnv("PYTH", vm.toString(address(0)));
+        Deploy deploy = runAndCheck(true);
+        assertTrue(deploy.isLocalPyth(), "local Pyth");
+        assertEq(deploy.vault().pyth(), deploy.pyth());
+        runAndCheck(false);
+
+        // PYTH names another one.
+        address realPyth = makeAddr("real pyth");
+        vm.setEnv("PYTH", vm.toString(realPyth));
+        deploy = runAndCheck(true);
+        assertFalse(deploy.isLocalPyth(), "no local Pyth");
+        assertEq(deploy.vault().pyth(), realPyth);
+
+        // Base Sepolia's comes from the profiles file.
+        vm.setEnv("PYTH", vm.toString(address(0)));
+        vm.chainId(84532);
+        assertEq(new Deploy().configuredPyth(vm.readFile(PROFILES)), 0xA2aa501b19aff244D90cc15a4Cf739D2725B5729);
     }
 
-    function runAndCheck(bool demoWaits, bool fixtureAirnodes) internal {
+    function test_AccountId_IsTheHashOfTheLowerCaseHandle() public {
+        Deploy deploy = new Deploy();
+        assertEq(deploy.accountId("realDonaldTrump"), keccak256("realdonaldtrump"));
+        assertEq(deploy.accountId("EuphratY"), keccak256("euphraty"));
+    }
+
+    function runAndCheck(bool demoWaits) internal returns (Deploy deploy) {
         vm.setEnv("PRIVATE_KEY", vm.toString(bytes32(DEPLOYER_KEY)));
         vm.setEnv("DEMO_WAITS", demoWaits ? "true" : "false");
-        vm.setEnv("FIXTURE_AIRNODES", fixtureAirnodes ? "true" : "false");
         vm.setEnv("DEPLOYMENT_FILE", OUT);
 
-        Deploy deploy = new Deploy();
+        deploy = new Deploy();
         deploy.run();
 
-        // The script wrote the addresses. Read the vault out of the file, and remove the file before anything can fail.
-        address writtenVault = vm.parseJsonAddress(vm.readFile(OUT), ".vault");
+        string memory written = vm.readFile(OUT);
+        address writtenVault = vm.parseJsonAddress(written, ".vault");
+        assertEq(vm.parseJsonAddress(written, ".pyth"), deploy.pyth(), "the file names Pyth");
         vm.removeFile(OUT);
         assertFalse(vm.exists(OUT), "the e2e file is gone");
 
@@ -46,89 +62,41 @@ contract DeployScriptFlowTest is Test {
         assertEq(vault.dex(), address(deploy.dex()), "the vault trades on the deployed DEX");
         assertEq(vault.quoteToken(), address(deploy.usdc()), "the vault holds the deployed mock USDC");
 
-        address fixtureAirnode =
-            fixtureAirnodes ? vm.parseJsonAddress(vm.readFile(MANIFEST), ".fixtureAirnode.address") : address(0);
         Deploy.AssetSpec[] memory specs = deploy.assetSpecs();
-        assertEq(specs.length, 5, "five assets");
+        assertEq(specs.length, 6, "six assets");
         for (uint256 i; i < specs.length; i++) {
-            checkProfile(deploy, vault, specs[i].key, demoWaits, fixtureAirnode);
+            checkProfile(deploy, vault, specs[i].key, demoWaits);
         }
-        checkAccounts(vault, fixtureAirnode);
+        checkAccounts(deploy, vault);
     }
 
-    function checkProfile(Deploy deploy, Vault vault, string memory key, bool demoWaits, address fixtureAirnode)
-        internal
-        view
-    {
+    function checkProfile(Deploy deploy, Vault vault, string memory key, bool demoWaits) internal view {
         string memory profiles = vm.readFile(PROFILES);
-        string memory hashes = vm.readFile(HASHES);
         string memory asset = string.concat(".assets.", key);
-        string memory price = string.concat(".prices.", key);
         IVault.AssetProfile memory profile = vault.getAssetProfile(keccak256(bytes(key)));
-
-        address token = address(deploy.tokens(key));
-        assertTrue(token != address(0), key);
-        assertEq(profile.token, token, string.concat(key, ": token"));
-        assertTrue(deploy.dex().isListed(token), string.concat(key, ": listed on the DEX"));
-        assertEq(
-            profile.airnode,
-            fixtureAirnode != address(0)
-                ? fixtureAirnode
-                : vm.parseJsonAddress(hashes, string.concat(price, ".airnode")),
-            string.concat(key, ": airnode")
-        );
-        assertEq(
-            profile.priceRequestHash,
-            vm.parseJsonBytes32(hashes, string.concat(price, ".requestHash")),
-            string.concat(key, ": request hash")
-        );
-        assertEq(
-            profile.minThresholdBps,
-            vm.parseJsonUint(profiles, string.concat(asset, ".trendThresholdBps")),
-            string.concat(key, ": threshold")
-        );
-        assertEq(
-            profile.maxSpikeCapBps,
-            vm.parseJsonUint(profiles, string.concat(asset, ".spikeCapBps")),
-            string.concat(key, ": spike cap")
-        );
+        assertEq(profile.token, address(deploy.tokens(key)), "token");
+        assertEq(profile.priceId, vm.parseJsonBytes32(profiles, string.concat(asset, ".pyth.priceId")), "feed");
+        assertEq(profile.minThresholdBps, vm.parseJsonUint(profiles, string.concat(asset, ".trendThresholdBps")));
+        assertEq(profile.maxSpikeCapBps, vm.parseJsonUint(profiles, string.concat(asset, ".spikeCapBps")));
         assertEq(
             profile.minWait,
             demoWaits
                 ? vm.parseJsonUint(profiles, ".demoOverrides.minWaitSec")
                 : vm.parseJsonUint(profiles, string.concat(asset, ".minWaitSec")),
-            string.concat(key, ": minimum wait")
+            "minimum wait"
         );
-        assertEq(
-            profile.maxWindow,
-            vm.parseJsonUint(profiles, string.concat(asset, ".maxWindowSec")),
-            string.concat(key, ": maximum window")
-        );
-        assertEq(
-            profile.maxPriceAge, vm.parseJsonUint(profiles, ".maxPriceAgeSec"), string.concat(key, ": max price age")
-        );
-        assertEq(
-            keccak256(bytes(vm.parseJsonString(profiles, string.concat(asset, ".price.timeUnit")))),
-            keccak256("ms"),
-            string.concat(key, ": the file writes milliseconds")
-        );
-        assertTrue(profile.updatedAtInMs, string.concat(key, ": updatedAt in milliseconds"));
+        assertEq(profile.maxWindow, vm.parseJsonUint(profiles, string.concat(asset, ".maxWindowSec")));
+        assertEq(profile.maxPriceAge, vm.parseJsonUint(profiles, ".maxPriceAgeSec"));
+        assertEq(profile.maxConfBps, vm.parseJsonUint(profiles, ".maxConfBps"));
+        assertEq(profile.maxStopLossBps, vm.parseJsonUint(profiles, ".maxStopLossBps"));
     }
 
-    function checkAccounts(Vault vault, address fixtureAirnode) internal view {
-        string memory hashes = vm.readFile(HASHES);
-        string[] memory handles = vm.parseJsonKeys(hashes, ".posts");
-        assertEq(handles.length, 5, "five watched accounts");
+    function checkAccounts(Deploy deploy, Vault vault) internal view {
+        string[] memory handles = deploy.watchedHandles(vm.readFile(WATCHLIST));
+        assertEq(handles.length, 6, "the watchlist's six accounts");
         for (uint256 i; i < handles.length; i++) {
-            string memory path = string.concat(".posts.", handles[i]);
-            address expected = fixtureAirnode != address(0)
-                ? fixtureAirnode
-                : vm.parseJsonAddress(hashes, string.concat(path, ".airnode"));
-            assertEq(
-                vault.getWatchableAccount(vm.parseJsonBytes32(hashes, string.concat(path, ".requestHash"))),
-                expected,
-                handles[i]
-            );
+            assertTrue(vault.isWatchableAccount(deploy.accountId(handles[i])), handles[i]);
         }
+        assertFalse(vault.isWatchableAccount(keccak256("nobody")), "only the watchlist");
     }
 }

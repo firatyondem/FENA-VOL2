@@ -5,48 +5,48 @@ import {IVault} from "../../src/interfaces/IVault.sol";
 import {MockDEX} from "../../src/mocks/MockDEX.sol";
 import {UnitBase} from "./UnitBase.sol";
 
-/// @notice A price of 0: every path that would use it reverts with a clean custom error, and nothing moves
+/// @notice A price of 0 or below: Pyth can publish one, and the vault refuses it before any other check, so nothing
+/// moves
 contract ZeroPriceTest is UnitBase {
     function test_RevertWhen_P1IsZero() public {
         (uint256 triggerId, uint256 t0) = openEthTriggerNow("2000");
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("0");
+        bytes[] memory p1 = signedPrice("0");
 
-        vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 2000e18, 0));
+        vm.expectRevert(IVault.PriceNotPositive.selector);
         vault.confirmTrigger(triggerId, p1);
         assertStatus(triggerId, IVault.TriggerStatus.Open);
     }
 
-    /// @dev The vault does not reject a zero P0 at Gate 1 (IVault has no error for it), but the trigger can never buy:
-    /// P1 = 0 is the only price inside a cap of 0 * (1 + cap), and MockDEX refuses to swap at 0.
-    function test_RevertWhen_ATriggerWithAZeroP0IsConfirmedAtZero() public {
-        (uint256 triggerId, uint256 t0) = openEthTriggerNow("0");
+    function test_RevertWhen_P1IsNegative() public {
+        (uint256 triggerId, uint256 t0) = openEthTriggerNow("2000");
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("0");
+        bytes[] memory p1 = pythUpdate(ETH_FEED, -1, 0, -8, block.timestamp, NO_PREV);
 
-        vm.expectRevert(abi.encodeWithSelector(MockDEX.ZeroPrice.selector));
+        vm.expectRevert(IVault.PriceNotPositive.selector);
         vault.confirmTrigger(triggerId, p1);
-        assertNothingBought(triggerId);
     }
 
-    function test_RevertWhen_ATriggerWithAZeroP0IsConfirmedAtOneWei() public {
-        (uint256 triggerId, uint256 t0) = openEthTriggerNow("0");
-        vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("0.000000000000000001");
+    function test_RevertWhen_P0IsZero() public {
+        uint256 postedAt = block.timestamp;
+        vm.warp(postedAt + 1 minutes);
+        Post memory tweet = signedTweet(postedAt);
+        bytes[] memory p0 = signedPrice("0");
 
-        vm.expectRevert(abi.encodeWithSelector(IVault.SpikeTooHigh.selector, 0, 1));
-        vault.confirmTrigger(triggerId, p1);
-        assertNothingBought(triggerId);
+        vm.prank(agent);
+        vm.expectRevert(IVault.PriceNotPositive.selector);
+        openTriggerWith(user, ETH, tweet, p0);
+        assertEq(vault.triggerCount(), 0);
     }
 
     function test_RevertWhen_AManualSellIsAtAZeroPrice() public {
         uint256 positionId = buyEth();
         uint256 amount = vault.getPosition(positionId).amount;
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory price = signedPrice("0");
+        bytes[] memory price = signedPrice("0");
 
         vm.prank(user);
-        vm.expectRevert(abi.encodeWithSelector(MockDEX.ZeroPrice.selector));
+        vm.expectRevert(IVault.PriceNotPositive.selector);
         vault.sell(positionId, IVault.SellReason.Manual, price);
 
         assertTrue(vault.getPosition(positionId).isOpen);
@@ -54,22 +54,14 @@ contract ZeroPriceTest is UnitBase {
         assertEq(vault.balanceOf(user), 950e6);
     }
 
-    function test_RevertWhen_ATakeProfitSellIsAtAZeroPrice() public {
+    function test_RevertWhen_AStopLossSellIsAtAZeroPrice() public {
+        // A zero price would pass any stop-loss line, so it must never reach the check.
         uint256 positionId = buyEth();
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory price = signedPrice("0");
+        bytes[] memory price = signedPrice("0");
 
-        vm.expectRevert(abi.encodeWithSelector(IVault.TakeProfitNotReached.selector, 0, 2235.6e18));
-        vault.sell(positionId, IVault.SellReason.TakeProfit, price);
-    }
-
-    function test_RevertWhen_AStagnationSellIsAtAZeroPrice() public {
-        uint256 positionId = buyEth();
-        vm.warp(block.timestamp + 24 hours);
-        IVault.SignedResponse memory price = signedPrice("0");
-
-        vm.expectRevert(abi.encodeWithSelector(IVault.PriceOutsideStagnationBand.selector, 0, 2070e18));
-        vault.sell(positionId, IVault.SellReason.Stagnation, price);
+        vm.expectRevert(IVault.PriceNotPositive.selector);
+        vault.sell(positionId, IVault.SellReason.StopLoss, price);
     }
 
     function test_RevertWhen_MockDEXBuysAtAZeroPrice() public {
@@ -79,14 +71,6 @@ contract ZeroPriceTest is UnitBase {
         vm.expectRevert(abi.encodeWithSelector(MockDEX.ZeroPrice.selector));
         dex.buy(address(teth), 50e6, 0);
     }
-
-    function assertNothingBought(uint256 triggerId) private view {
-        assertStatus(triggerId, IVault.TriggerStatus.Open);
-        assertEq(vault.balanceOf(user), 1_000e6);
-        assertEq(vault.spentToday(user, ETH), 0);
-        assertEq(usdc.balanceOf(address(vault)), 1_000e6);
-        assertEq(teth.balanceOf(address(vault)), 0);
-    }
 }
 
 /// @notice A price of 1 wei (1e-18 USD): no overflow, and every invalid use reverts with a clean custom error
@@ -95,7 +79,7 @@ contract OneWeiPriceTest is UnitBase {
     function test_RevertWhen_P0AndP1AreOneWei() public {
         (uint256 triggerId, uint256 t0) = openEthTriggerNow("0.000000000000000001");
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("0.000000000000000001");
+        bytes[] memory p1 = signedPrice("0.000000000000000001");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 1, 1));
         vault.confirmTrigger(triggerId, p1);
@@ -104,7 +88,7 @@ contract OneWeiPriceTest is UnitBase {
     function test_RevertWhen_P0IsOneWeiAndP1IsTwoWei() public {
         (uint256 triggerId, uint256 t0) = openEthTriggerNow("0.000000000000000001");
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("0.000000000000000002");
+        bytes[] memory p1 = signedPrice("0.000000000000000002");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.SpikeTooHigh.selector, 1, 2));
         vault.confirmTrigger(triggerId, p1);
@@ -119,7 +103,7 @@ contract OneWeiPriceTest is UnitBase {
         assertEq(position.amount, 5e36);
 
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory price = signedPrice("0.000000000000000010");
+        bytes[] memory price = signedPrice("0.000000000000000010");
         vm.prank(user);
         assertEq(vault.sell(positionId, IVault.SellReason.Manual, price), 50e6);
         assertEq(vault.balanceOf(user), 1_000e6);
@@ -128,7 +112,7 @@ contract OneWeiPriceTest is UnitBase {
     function test_RevertWhen_P0IsNineWeiAndP1IsOneWeiBelowTen() public {
         (uint256 triggerId, uint256 t0) = openEthTriggerNow("0.000000000000000009");
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("0.000000000000000009");
+        bytes[] memory p1 = signedPrice("0.000000000000000009");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 9, 9));
         vault.confirmTrigger(triggerId, p1);
@@ -138,7 +122,7 @@ contract OneWeiPriceTest is UnitBase {
     function test_RevertWhen_AManualSellIsAtOneWei() public {
         uint256 positionId = buyEth();
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory price = signedPrice("0.000000000000000001");
+        bytes[] memory price = signedPrice("0.000000000000000001");
 
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(MockDEX.ZeroOutput.selector));
@@ -149,7 +133,7 @@ contract OneWeiPriceTest is UnitBase {
     function test_RevertWhen_AStagnationSellIsAtOneWei() public {
         uint256 positionId = buyEth();
         vm.warp(block.timestamp + 24 hours);
-        IVault.SignedResponse memory price = signedPrice("0.000000000000000001");
+        bytes[] memory price = signedPrice("0.000000000000000001");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.PriceOutsideStagnationBand.selector, 1, 2070e18));
         vault.sell(positionId, IVault.SellReason.Stagnation, price);
@@ -168,7 +152,8 @@ contract OneWeiPriceTest is UnitBase {
     }
 }
 
-/// @notice A price of 1e30 wei (1e12 USD per token): the Gate 2, take-profit and swap arithmetic do not overflow
+/// @notice A price of 1e30 wei (1e12 USD per token): the Gate 2, take-profit and swap arithmetic do not overflow. "One
+/// wei" is Pyth's finest step at that size, 1e12 wei (exponent -6).
 contract HugePriceTest is UnitBase {
     // 1e30 wei and 0.9e30 wei as 18-decimal strings
     string constant P_1E30 = "1000000000000.000000000000000000";
@@ -183,9 +168,9 @@ contract HugePriceTest is UnitBase {
     function test_RevertWhen_P1IsOneWeiBelowTheThresholdOf1e30() public {
         (uint256 triggerId, uint256 t0) = openEthTriggerNow(P_1E30);
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("1029999999999.999999999999999999");
+        bytes[] memory p1 = signedPrice("1029999999999.999999");
 
-        vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 1e30, 1.03e30 - 1));
+        vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 1e30, 1.03e30 - 1e12));
         vault.confirmTrigger(triggerId, p1);
     }
 
@@ -198,9 +183,9 @@ contract HugePriceTest is UnitBase {
     function test_RevertWhen_P1IsOneWeiAboveTheSpikeCapOf1e30() public {
         (uint256 triggerId, uint256 t0) = openEthTriggerNow(P_1E30);
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("1120000000000.000000000000000001");
+        bytes[] memory p1 = signedPrice("1120000000000.000001");
 
-        vm.expectRevert(abi.encodeWithSelector(IVault.SpikeTooHigh.selector, 1e30, 1.12e30 + 1));
+        vm.expectRevert(abi.encodeWithSelector(IVault.SpikeTooHigh.selector, 1e30, 1.12e30 + 1e12));
         vault.confirmTrigger(triggerId, p1);
     }
 
@@ -213,7 +198,7 @@ contract HugePriceTest is UnitBase {
         assertEq(position.amount, 50e6);
 
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory price = signedPrice("1080000000000.000000000000000000");
+        bytes[] memory price = signedPrice("1080000000000.000000000000000000");
         vm.prank(keeper);
         assertEq(vault.sell(positionId, IVault.SellReason.TakeProfit, price), 54e6);
         assertEq(vault.balanceOf(user), 1_004e6);
@@ -222,9 +207,9 @@ contract HugePriceTest is UnitBase {
     function test_RevertWhen_TheTakeProfitPriceIsOneWeiBelowTheTargetOf1e30() public {
         uint256 positionId = buyEthAt(P_090, P_1E30);
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory price = signedPrice("1079999999999.999999999999999999");
+        bytes[] memory price = signedPrice("1079999999999.999999");
 
-        vm.expectRevert(abi.encodeWithSelector(IVault.TakeProfitNotReached.selector, 1.08e30 - 1, 1.08e30));
+        vm.expectRevert(abi.encodeWithSelector(IVault.TakeProfitNotReached.selector, 1.08e30 - 1e12, 1.08e30));
         vault.sell(positionId, IVault.SellReason.TakeProfit, price);
     }
 
@@ -232,7 +217,7 @@ contract HugePriceTest is UnitBase {
     function test_Sell_TakesProfitAt1e30ForAnOrdinaryPosition() public {
         uint256 positionId = buyEth();
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory price = signedPrice(P_1E30);
+        bytes[] memory price = signedPrice(P_1E30);
 
         vm.prank(keeper);
         uint256 quoteOut = vault.sell(positionId, IVault.SellReason.TakeProfit, price);
@@ -248,7 +233,7 @@ contract HugePriceTest is UnitBase {
         assertEq(vault.getPosition(positionId).amount, 1);
 
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory price = signedPrice(P_1E30);
+        bytes[] memory price = signedPrice(P_1E30);
         vm.prank(user);
         assertEq(vault.sell(positionId, IVault.SellReason.Manual, price), 1);
         assertEq(vault.balanceOf(user), 1_000e6);
@@ -260,7 +245,7 @@ contract HugePriceTest is UnitBase {
         setUserEthRule(IVault.Rule({agent: agent, buyAmount: 1, maxPerTrade: 1, dailyLimit: 1}), ethRule());
         (uint256 triggerId, uint256 t0) = openEthTriggerNow(P_090);
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("1000000000000.000000000000000001");
+        bytes[] memory p1 = signedPrice("1000000000000.000001");
 
         vm.expectRevert(abi.encodeWithSelector(MockDEX.ZeroOutput.selector));
         vault.confirmTrigger(triggerId, p1);
@@ -270,12 +255,14 @@ contract HugePriceTest is UnitBase {
     }
 }
 
-/// @notice The same extremes read as whole-dollar JSON prices: "1" is 1 USD (1e18 wei) and 1e30 USD is 1e48 wei. The
+/// @notice The same extremes as whole-dollar prices: "1" is 1 USD (1e18 wei) and 1e30 USD is 1e48 wei, which Pyth writes
+/// with a positive exponent. "One wei" is Pyth's finest step at each size. The
 /// Gate 2 and swap arithmetic do not overflow there either, and a buy that cannot pay for even 1 asset wei reverts with
 /// a custom error.
 contract WholeDollarPriceExtremesTest is UnitBase {
-    // 1e30 USD = 1e48 wei
+    // 1e30 USD = 1e48 wei, and Pyth's finest step there: an exponent of +12
     uint256 constant HUGE = 1e48;
+    uint256 constant HUGE_UNIT = 1e30;
 
     function test_ConfirmTrigger_BuysAtExactlyTheThresholdOfOneDollar() public {
         uint256 positionId = buyEthAt("1", "1.03");
@@ -288,7 +275,7 @@ contract WholeDollarPriceExtremesTest is UnitBase {
     function test_RevertWhen_P1IsOneWeiBelowTheThresholdOfOneDollar() public {
         (uint256 triggerId, uint256 t0) = openEthTriggerNow("1");
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice("1.029999999999999999");
+        bytes[] memory p1 = signedPrice("1.029999999999999999");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, 1e18, 1.03e18 - 1));
         vault.confirmTrigger(triggerId, p1);
@@ -299,7 +286,7 @@ contract WholeDollarPriceExtremesTest is UnitBase {
         assertEq(vault.getPosition(positionId).amount, 50e18);
 
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory price = signedPrice("1");
+        bytes[] memory price = signedPrice("1");
         vm.prank(user);
         assertEq(vault.sell(positionId, IVault.SellReason.Manual, price), 50e6);
         assertEq(vault.balanceOf(user), 1_000e6);
@@ -308,18 +295,18 @@ contract WholeDollarPriceExtremesTest is UnitBase {
     function test_RevertWhen_P1IsOneWeiBelowTheThresholdOf1e30Dollars() public {
         (uint256 triggerId, uint256 t0) = openEthTriggerNow(decimalString(HUGE));
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice(decimalString(HUGE * 103 / 100 - 1));
+        bytes[] memory p1 = signedPrice(decimalString(HUGE * 103 / 100 - HUGE_UNIT));
 
-        vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, HUGE, HUGE * 103 / 100 - 1));
+        vm.expectRevert(abi.encodeWithSelector(IVault.TrendTooWeak.selector, HUGE, HUGE * 103 / 100 - HUGE_UNIT));
         vault.confirmTrigger(triggerId, p1);
     }
 
     function test_RevertWhen_P1IsOneWeiAboveTheSpikeCapOf1e30Dollars() public {
         (uint256 triggerId, uint256 t0) = openEthTriggerNow(decimalString(HUGE));
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice(decimalString(HUGE * 112 / 100 + 1));
+        bytes[] memory p1 = signedPrice(decimalString(HUGE * 112 / 100 + HUGE_UNIT));
 
-        vm.expectRevert(abi.encodeWithSelector(IVault.SpikeTooHigh.selector, HUGE, HUGE * 112 / 100 + 1));
+        vm.expectRevert(abi.encodeWithSelector(IVault.SpikeTooHigh.selector, HUGE, HUGE * 112 / 100 + HUGE_UNIT));
         vault.confirmTrigger(triggerId, p1);
     }
 
@@ -328,7 +315,7 @@ contract WholeDollarPriceExtremesTest is UnitBase {
     function test_RevertWhen_FiftyUsdcBuyLessThanOneAssetWeiAt1e30Dollars() public {
         (uint256 triggerId, uint256 t0) = openEthTriggerNow(decimalString(HUGE));
         vm.warp(t0 + 31 minutes);
-        IVault.SignedResponse memory p1 = signedPrice(decimalString(HUGE * 103 / 100));
+        bytes[] memory p1 = signedPrice(decimalString(HUGE * 103 / 100));
 
         vm.expectRevert(abi.encodeWithSelector(MockDEX.ZeroOutput.selector));
         vault.confirmTrigger(triggerId, p1);
@@ -341,7 +328,7 @@ contract WholeDollarPriceExtremesTest is UnitBase {
     function test_Sell_TakesProfitAt1e30DollarsWithoutOverflow() public {
         uint256 positionId = buyEth();
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory price = signedPrice(decimalString(HUGE));
+        bytes[] memory price = signedPrice(decimalString(HUGE));
 
         vm.prank(keeper);
         uint256 quoteOut = vault.sell(positionId, IVault.SellReason.TakeProfit, price);
@@ -353,7 +340,7 @@ contract WholeDollarPriceExtremesTest is UnitBase {
     function test_RevertWhen_AStagnationSellIsAt1e30Dollars() public {
         uint256 positionId = buyEth();
         vm.warp(block.timestamp + 24 hours);
-        IVault.SignedResponse memory price = signedPrice(decimalString(HUGE));
+        bytes[] memory price = signedPrice(decimalString(HUGE));
 
         vm.expectRevert(abi.encodeWithSelector(IVault.PriceOutsideStagnationBand.selector, HUGE, 2070e18));
         vault.sell(positionId, IVault.SellReason.Stagnation, price);

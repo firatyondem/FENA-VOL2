@@ -21,7 +21,7 @@ contract SellBoundariesTest is UnitBase {
 
     function test_Sell_TakesProfitAtExactlyTheTarget() public {
         vm.warp(boughtAt + 1 hours);
-        IVault.SignedResponse memory price = signedPrice("2235.600000000000000000");
+        bytes[] memory price = signedPrice("2235.600000000000000000");
 
         vm.prank(keeper);
         uint256 quoteOut = vault.sell(positionId, IVault.SellReason.TakeProfit, price);
@@ -32,29 +32,32 @@ contract SellBoundariesTest is UnitBase {
 
     function test_RevertWhen_ThePriceIsOneWeiBelowTheTakeProfitTarget() public {
         vm.warp(boughtAt + 1 hours);
-        IVault.SignedResponse memory price = signedPrice("2235.599999999999999999");
+        bytes[] memory price = signedPrice("2235.59999999");
 
         vm.prank(keeper);
-        vm.expectRevert(abi.encodeWithSelector(IVault.TakeProfitNotReached.selector, 2235599999999999999999, 2235.6e18));
+        vm.expectRevert(abi.encodeWithSelector(IVault.TakeProfitNotReached.selector, 2235599999990000000000, 2235.6e18));
         vault.sell(positionId, IVault.SellReason.TakeProfit, price);
     }
 
     function test_RevertWhen_TakeProfitIsOffAtAnyPrice() public {
+        // A position bought under a rule with take-profit off
         IVault.AssetRule memory assetRule = ethRule();
         assetRule.takeProfitBps = 0;
+        assetRule.cooldown = 0;
         setUserEthRule(rule(), assetRule);
-        vm.warp(boughtAt + 1 hours);
-        IVault.SignedResponse memory price = signedPrice("1000000000000");
+        uint256 offPosition = buyEthAt("2000", "2070");
+        vm.warp(block.timestamp + 1 hours);
+        bytes[] memory price = signedPrice("1000000000000");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.TakeProfitNotReached.selector, 1e30, type(uint256).max));
-        vault.sell(positionId, IVault.SellReason.TakeProfit, price);
+        vault.sell(offPosition, IVault.SellReason.TakeProfit, price);
     }
 
     // Stagnation: the delay Z
 
     function test_Sell_ExitsOnStagnationExactlyAtTheDelay() public {
         vm.warp(boughtAt + 24 hours);
-        IVault.SignedResponse memory price = signedPrice("2070");
+        bytes[] memory price = signedPrice("2070");
 
         vm.prank(keeper);
         vault.sell(positionId, IVault.SellReason.Stagnation, price);
@@ -63,7 +66,7 @@ contract SellBoundariesTest is UnitBase {
 
     function test_RevertWhen_TheStagnationPriceIsOneSecondBeforeTheDelay() public {
         vm.warp(boughtAt + 24 hours - 1);
-        IVault.SignedResponse memory price = signedPrice("2070");
+        bytes[] memory price = signedPrice("2070");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.StagnationDelayNotOver.selector, boughtAt + 24 hours));
         vault.sell(positionId, IVault.SellReason.Stagnation, price);
@@ -72,7 +75,7 @@ contract SellBoundariesTest is UnitBase {
     /// @dev The delay is measured on the time the source took the price, not on the block time.
     function test_RevertWhen_TheStagnationPriceWasTakenOneSecondBeforeTheDelayButSubmittedLater() public {
         vm.warp(boughtAt + 24 hours + 1 minutes);
-        IVault.SignedResponse memory price = signedPriceAt("2070", boughtAt + 24 hours - 1);
+        bytes[] memory price = signedPriceAt("2070", boughtAt + 24 hours - 1);
 
         vm.expectRevert(abi.encodeWithSelector(IVault.StagnationDelayNotOver.selector, boughtAt + 24 hours));
         vault.sell(positionId, IVault.SellReason.Stagnation, price);
@@ -89,10 +92,10 @@ contract SellBoundariesTest is UnitBase {
 
     function test_RevertWhen_TheStagnationPriceIsOneWeiAboveTheBand() public {
         vm.warp(boughtAt + 24 hours);
-        IVault.SignedResponse memory price = signedPrice("2090.700000000000000001");
+        bytes[] memory price = signedPrice("2090.70000001");
 
         vm.expectRevert(
-            abi.encodeWithSelector(IVault.PriceOutsideStagnationBand.selector, 2090700000000000000001, 2070e18)
+            abi.encodeWithSelector(IVault.PriceOutsideStagnationBand.selector, 2090700000010000000000, 2070e18)
         );
         vault.sell(positionId, IVault.SellReason.Stagnation, price);
     }
@@ -106,30 +109,44 @@ contract SellBoundariesTest is UnitBase {
 
     function test_RevertWhen_TheStagnationPriceIsOneWeiBelowTheBand() public {
         vm.warp(boughtAt + 24 hours);
-        IVault.SignedResponse memory price = signedPrice("2049.299999999999999999");
+        bytes[] memory price = signedPrice("2049.29999999");
 
         vm.expectRevert(
-            abi.encodeWithSelector(IVault.PriceOutsideStagnationBand.selector, 2049299999999999999999, 2070e18)
+            abi.encodeWithSelector(IVault.PriceOutsideStagnationBand.selector, 2049299999990000000000, 2070e18)
         );
         vault.sell(positionId, IVault.SellReason.Stagnation, price);
     }
 
     function test_RevertWhen_TheStagnationExitIsOff() public {
+        // A position bought under a rule with the stagnation exit off
         IVault.AssetRule memory assetRule = ethRule();
         assetRule.stagnationDelay = 0;
+        assetRule.cooldown = 0;
         setUserEthRule(rule(), assetRule);
-        vm.warp(boughtAt + 365 days);
-        IVault.SignedResponse memory price = signedPrice("2070");
+        uint256 offPosition = buyEthAt("2000", "2070");
+        vm.warp(block.timestamp + 365 days);
+        bytes[] memory price = signedPrice("2070");
 
         vm.expectRevert(abi.encodeWithSelector(IVault.StagnationDelayNotOver.selector, type(uint256).max));
-        vault.sell(positionId, IVault.SellReason.Stagnation, price);
+        vault.sell(offPosition, IVault.SellReason.Stagnation, price);
+    }
+
+    function test_Sell_APositionKeepsItsExitsWhenTheRuleTurnsThemOff() public {
+        IVault.AssetRule memory assetRule = ethRule();
+        assetRule.takeProfitBps = 0;
+        assetRule.stagnationDelay = 0;
+        setUserEthRule(rule(), assetRule);
+        vm.warp(boughtAt + 24 hours);
+
+        vault.sell(positionId, IVault.SellReason.Stagnation, signedPrice("2070"));
+        assertFalse(vault.getPosition(positionId).isOpen);
     }
 
     // The sell price itself: taken no earlier than the buy
 
     function test_Sell_TakesProfitWithAPriceTakenAtTheSecondOfTheBuy() public {
         vm.warp(boughtAt + 1 minutes);
-        IVault.SignedResponse memory price = signedPriceAt("2235.6", boughtAt);
+        bytes[] memory price = signedPriceAt("2235.6", boughtAt);
 
         vault.sell(positionId, IVault.SellReason.TakeProfit, price);
         assertFalse(vault.getPosition(positionId).isOpen);
@@ -137,7 +154,7 @@ contract SellBoundariesTest is UnitBase {
 
     function test_RevertWhen_TheSellPriceWasTakenOneSecondBeforeTheBuy() public {
         vm.warp(boughtAt + 1 minutes);
-        IVault.SignedResponse memory price = signedPriceAt("2235.6", boughtAt - 1);
+        bytes[] memory price = signedPriceAt("2235.6", boughtAt - 1);
 
         vm.expectRevert(abi.encodeWithSelector(IVault.PriceBeforeBuy.selector, boughtAt - 1, boughtAt));
         vault.sell(positionId, IVault.SellReason.TakeProfit, price);
@@ -154,25 +171,25 @@ contract SellRoundingBoundariesTest is UnitBase {
 
     function setUp() public override {
         super.setUp();
-        positionId = buyEthAt("2000", "2070.000000000000000001");
+        positionId = buyEthAt("2000", "2070.00000001");
         boughtAt = block.timestamp;
-        assertEq(vault.getPosition(positionId).entryPrice, 2070000000000000000001);
+        assertEq(vault.getPosition(positionId).entryPrice, 2070000000010000000000);
     }
 
     function test_Sell_TakesProfitAtTheTargetRoundedUp() public {
         vm.warp(boughtAt + 1 hours);
 
-        vault.sell(positionId, IVault.SellReason.TakeProfit, signedPrice("2235.600000000000000002"));
+        vault.sell(positionId, IVault.SellReason.TakeProfit, signedPrice("2235.60000002"));
         assertFalse(vault.getPosition(positionId).isOpen);
     }
 
-    /// @dev IVault: "Anyone can sell a position when P >= entry * (1 + take-profit)". 2235600000000000000001 is below
+    /// @dev IVault: "Anyone can sell a position when P >= entry * (1 + take-profit)". 2235600000010000000000 is below
     /// entry * 1.08 = 2235600000000000000001.08, so it must not sell. The trend and stagnation checks cross-multiply and
     /// are exact; this edge holds take-profit to the same standard. The reported target is not a whole number of wei,
     /// so the spec does not fix how the error rounds it, and only the selector is checked.
     function test_RevertWhen_ThePriceIsTheTakeProfitTargetRoundedDown() public {
         vm.warp(boughtAt + 1 hours);
-        IVault.SignedResponse memory price = signedPrice("2235.600000000000000001");
+        bytes[] memory price = signedPrice("2235.60000001");
 
         vm.expectPartialRevert(IVault.TakeProfitNotReached.selector);
         vault.sell(positionId, IVault.SellReason.TakeProfit, price);
@@ -182,17 +199,17 @@ contract SellRoundingBoundariesTest is UnitBase {
     function test_Sell_ExitsOnStagnationAtTheUpperBandRoundedDown() public {
         vm.warp(boughtAt + 24 hours);
 
-        vault.sell(positionId, IVault.SellReason.Stagnation, signedPrice("2090.700000000000000001"));
+        vault.sell(positionId, IVault.SellReason.Stagnation, signedPrice("2090.70000001"));
         assertFalse(vault.getPosition(positionId).isOpen);
     }
 
     function test_RevertWhen_TheStagnationPriceIsTheUpperBandRoundedUp() public {
         vm.warp(boughtAt + 24 hours);
-        IVault.SignedResponse memory price = signedPrice("2090.700000000000000002");
+        bytes[] memory price = signedPrice("2090.70000002");
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IVault.PriceOutsideStagnationBand.selector, 2090700000000000000002, 2070000000000000000001
+                IVault.PriceOutsideStagnationBand.selector, 2090700000020000000000, 2070000000010000000000
             )
         );
         vault.sell(positionId, IVault.SellReason.Stagnation, price);
@@ -201,17 +218,17 @@ contract SellRoundingBoundariesTest is UnitBase {
     function test_Sell_ExitsOnStagnationAtTheLowerBandRoundedUp() public {
         vm.warp(boughtAt + 24 hours);
 
-        vault.sell(positionId, IVault.SellReason.Stagnation, signedPrice("2049.300000000000000001"));
+        vault.sell(positionId, IVault.SellReason.Stagnation, signedPrice("2049.30000001"));
         assertFalse(vault.getPosition(positionId).isOpen);
     }
 
     function test_RevertWhen_TheStagnationPriceIsTheLowerBandRoundedDown() public {
         vm.warp(boughtAt + 24 hours);
-        IVault.SignedResponse memory price = signedPrice("2049.300000000000000000");
+        bytes[] memory price = signedPrice("2049.300000000000000000");
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IVault.PriceOutsideStagnationBand.selector, 2049300000000000000000, 2070000000000000000001
+                IVault.PriceOutsideStagnationBand.selector, 2049300000000000000000, 2070000000010000000000
             )
         );
         vault.sell(positionId, IVault.SellReason.Stagnation, price);

@@ -49,7 +49,7 @@ contract DecimalsBoundariesTest is UnitBase {
     }
 
     /// @dev Prices from the lowest that the trend can buy (10 wei) to 1e30 wei, many of them chosen so that both swaps
-    /// round
+    /// round, each as close as Pyth can write it
     function test_BuyThenSellAtTheSamePrice_NeverCreatesValueAndLosesAtMostOneUnit() public {
         uint256[10] memory prices = [
             uint256(10),
@@ -66,9 +66,9 @@ contract DecimalsBoundariesTest is UnitBase {
         uint256 balance = vault.balanceOf(user);
 
         for (uint256 i; i < prices.length; i++) {
-            uint256 p1 = prices[i];
+            uint256 p1 = pythPrice(prices[i]);
             // P1 is about 5% above P0, inside the 3% threshold and the 12% cap.
-            uint256 p0 = p1 * 10_000 / 10_500;
+            uint256 p0 = pythPrice(p1 * 10_000 / 10_500);
             uint256 positionId = buyEthAt(decimalString(p0), decimalString(p1));
             uint256 cost = vault.getPosition(positionId).cost;
 
@@ -90,7 +90,7 @@ contract DecimalsBoundariesTest is UnitBase {
         uint256 positionId = buyEthAt("2000", "2070.000000000000000000");
         assertEq(vault.getPosition(positionId).amount, 483091787);
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory price = signedPrice("2070.000000000000000000");
+        bytes[] memory price = signedPrice("2070.000000000000000000");
 
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(MockDEX.ZeroOutput.selector));
@@ -105,7 +105,7 @@ contract DecimalsBoundariesTest is UnitBase {
     /// @dev Sells the position by hand, one minute after the buy, at `price`
     function sellAtTheSamePrice(uint256 positionId, string memory price) private returns (uint256 quoteOut) {
         vm.warp(block.timestamp + 1 minutes);
-        IVault.SignedResponse memory response = signedPrice(price);
+        bytes[] memory response = signedPrice(price);
         vm.prank(user);
         quoteOut = vault.sell(positionId, IVault.SellReason.Manual, response);
         assertFalse(vault.getPosition(positionId).isOpen);
