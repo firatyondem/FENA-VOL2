@@ -1,0 +1,101 @@
+{
+  "user": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+  "decisions": [
+    {
+      "tweetId": "2120807331313745920",
+      "account": "EuphratY",
+      "text": "Coffee first, charts later. Good morning.",
+      "createdAt": 1794474845,
+      "verdict": "skipped-by-filter",
+      "reason": "No topic of the rule's assets appears in the post.",
+      "classifier": "filter",
+      "assets": []
+    },
+    {
+      "tweetId": "2120587994380369920",
+      "account": "EuphratY",
+      "text": "Hearing that the new stablecoin law clears committee this week. Big for Ethereum if it holds.",
+      "createdAt": 1794422551,
+      "verdict": "relevant",
+      "reason": "The post is about a stablecoin law, a listed topic for Ether.",
+      "classifier": "claude-haiku-5-5",
+      "assets": [
+        {
+          "assetId": "ETH",
+          "gate": 1,
+          "outcome": "opened",
+          "txHash": "0x3b9d5e1f7a2c4806b1d3f5a79c0e2b4d6f8a1c3e5b7d9f02a4c6e8b0d2f4a6c8"
+        },
+        {
+          "assetId": "ETH",
+          "gate": 2,
+          "outcome": "bought",
+          "txHash": "0x9e1c3a5f7b2d4068c0e2a4b6d8f0a1c3e5b7d9f1a3c5e7092b4d6f8a0c2e4b6d"
+        }
+      ]
+    },
+    {
+      "tweetId": "2120503105861713920",
+      "account": "EuphratY",
+      "text": "Bitcoin and Ether both look ready to run after the Fed minutes. Not advice.",
+      "createdAt": 1794402312,
+      "verdict": "relevant",
+      "reason": "The post links the Fed's minutes to Bitcoin and Ether, a listed topic for both.",
+      "classifier": "claude-haiku-5-5",
+      "assets": [
+        {
+          "assetId": "BTC",
+          "gate": 1,
+          "outcome": "opened",
+          "txHash": "0x5a7c9e1b3d5f7092a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a1c3e5b7d9f0"
+        },
+        { "assetId": "BTC", "gate": 2, "outcome": "expired" },
+        {
+          "assetId": "ETH",
+          "gate": 1,
+          "outcome": "opened",
+          "txHash": "0x2d4f6a8c0e2b4d6f8a1c3e5b7d9f02a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6"
+        },
+        { "assetId": "ETH", "gate": 2, "outcome": "SpikeTooHigh" }
+      ]
+    },
+    {
+      "tweetId": "2119827550287953920",
+      "account": "EuphratY",
+      "text": "The SEC's new crypto rules land tomorrow. Expect a reaction in ETH.",
+      "createdAt": 1794241247,
+      "verdict": "relevant",
+      "reason": "The post announces SEC crypto rules, a listed topic for Ether.",
+      "classifier": "claude-haiku-5-5",
+      "assets": [
+        {
+          "assetId": "ETH",
+          "gate": 1,
+          "outcome": "opened",
+          "txHash": "0x8f0a2c4e6b8d0f2a4c6e8b1d3f5a7c9e1b3d5f7092a4c6e8b0d2f4a6c8e0b2d4"
+        },
+        { "assetId": "ETH", "gate": 2, "outcome": "TrendTooWeak" }
+      ]
+    },
+    {
+      "tweetId": "2119022910814289920",
+      "account": "EuphratY",
+      "text": "Ethereum upgrade went through without a hitch last night.",
+      "createdAt": 1794049406,
+      "verdict": "relevant",
+      "reason": "The post is about an Ethereum network upgrade, a listed topic for Ether.",
+      "classifier": "claude-haiku-5-5",
+      "assets": [{ "assetId": "ETH", "gate": 1, "outcome": "PriceTooOld" }]
+    },
+    {
+      "tweetId": "2118990597896273920",
+      "account": "EuphratY",
+      "text": "My dog ate an ethernet cable this morning. Send help.",
+      "createdAt": 1794041702,
+      "verdict": "not-relevant",
+      "reason": "The post is a joke about a network cable, not about Ether the asset.",
+      "classifier": "claude-haiku-5-5",
+      "assets": []
+    }
+  ]
+}
