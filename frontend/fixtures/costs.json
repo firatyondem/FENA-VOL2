@@ -1,0 +1,93 @@
+{
+  "user": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+  "days": [
+    {
+      "date": "2026-11-06",
+      "posts": 480,
+      "aiCalls": 6,
+      "priceUpdates": 0,
+      "gasWei": "0",
+      "totalUsd": 0.2436,
+      "bySource": {
+        "getxapi": { "kind": "post-fetch", "units": 480, "usd": 0.24 },
+        "claude-haiku-5-5": { "kind": "ai-call", "units": 2400, "usd": 0.0036 }
+      }
+    },
+    {
+      "date": "2026-11-07",
+      "posts": 480,
+      "aiCalls": 9,
+      "priceUpdates": 2,
+      "gasWei": "1200000000000",
+      "totalUsd": 0.24842,
+      "bySource": {
+        "getxapi": { "kind": "post-fetch", "units": 480, "usd": 0.24 },
+        "claude-haiku-5-5": { "kind": "ai-call", "units": 3600, "usd": 0.0054 },
+        "pyth": { "kind": "price-update-fee", "units": 2, "usd": 0.00002 },
+        "base-sepolia": { "kind": "gas", "units": 2, "usd": 0.003 }
+      }
+    },
+    {
+      "date": "2026-11-08",
+      "posts": 480,
+      "aiCalls": 4,
+      "priceUpdates": 0,
+      "gasWei": "0",
+      "totalUsd": 0.2424,
+      "bySource": {
+        "getxapi": { "kind": "post-fetch", "units": 480, "usd": 0.24 },
+        "claude-haiku-5-5": { "kind": "ai-call", "units": 1600, "usd": 0.0024 }
+      }
+    },
+    {
+      "date": "2026-11-09",
+      "posts": 480,
+      "aiCalls": 7,
+      "priceUpdates": 1,
+      "gasWei": "600000000000",
+      "totalUsd": 0.24571,
+      "bySource": {
+        "getxapi": { "kind": "post-fetch", "units": 480, "usd": 0.24 },
+        "claude-haiku-5-5": { "kind": "ai-call", "units": 2800, "usd": 0.0042 },
+        "pyth": { "kind": "price-update-fee", "units": 1, "usd": 0.00001 },
+        "base-sepolia": { "kind": "gas", "units": 1, "usd": 0.0015 }
+      }
+    },
+    {
+      "date": "2026-11-10",
+      "posts": 0,
+      "aiCalls": 0,
+      "priceUpdates": 0,
+      "gasWei": "0",
+      "totalUsd": 0,
+      "bySource": {}
+    },
+    {
+      "date": "2026-11-11",
+      "posts": 480,
+      "aiCalls": 11,
+      "priceUpdates": 3,
+      "gasWei": "1800000000000",
+      "totalUsd": 0.25113,
+      "bySource": {
+        "getxapi": { "kind": "post-fetch", "units": 480, "usd": 0.24 },
+        "claude-haiku-5-5": { "kind": "ai-call", "units": 4400, "usd": 0.0066 },
+        "pyth": { "kind": "price-update-fee", "units": 3, "usd": 0.00003 },
+        "base-sepolia": { "kind": "gas", "units": 3, "usd": 0.0045 }
+      }
+    },
+    {
+      "date": "2026-11-12",
+      "posts": 212,
+      "aiCalls": 3,
+      "priceUpdates": 0,
+      "gasWei": "0",
+      "totalUsd": 0.1078,
+      "bySource": {
+        "getxapi": { "kind": "post-fetch", "units": 212, "usd": 0.106 },
+        "claude-haiku-5-5": { "kind": "ai-call", "units": 1200, "usd": 0.0018 }
+      }
+    }
+  ],
+  "totalUsd": 1.33906
+}
